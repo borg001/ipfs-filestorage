@@ -1,85 +1,122 @@
-package ipfs
+package ipfs_test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
-	"strings"
 	"testing"
+	"time"
+
+	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 )
 
-func ipfsURL(t *testing.T) string {
+func getTestClient(t *testing.T) *ipfs.Client {
 	t.Helper()
 	url := os.Getenv("TEST_IPFS_URL")
 	if url == "" {
 		t.Skip("TEST_IPFS_URL not set, skipping integration test")
 	}
-	return url
+	c, err := ipfs.New(url)
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	return c
+}
+
+func TestClient_Add(t *testing.T) {
+	c := getTestClient(t)
+	ctx := context.Background()
+
+	content := []byte("hello ipfs from test")
+	result, err := c.Add(ctx, "test.txt", bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if result.CID == "" {
+		t.Fatal("expected non-empty CID")
+	}
+	t.Logf("Added CID: %s", result.CID)
 }
 
 func TestClient_Add_Pin_Cat_Unpin(t *testing.T) {
-	url := ipfsURL(t)
-
-	client, err := New(url)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
+	c := getTestClient(t)
 	ctx := context.Background()
-	content := "hello ipfs integration test"
 
-	// Add
-	result, err := client.Add(ctx, "test.txt", strings.NewReader(content))
+	// 1. Add
+	content := []byte("hello ipfs integration test")
+	result, err := c.Add(ctx, "integration-test.txt", bytes.NewReader(content))
 	if err != nil {
-		t.Fatalf("Add: %v", err)
+		t.Fatalf("Add failed: %v", err)
 	}
-	if result.CID == "" {
-		t.Fatal("Add: empty CID")
-	}
-	t.Logf("Added CID: %s", result.CID)
+	t.Logf("CID: %s", result.CID)
 
-	// Pin
-	err = client.Pin(ctx, result.CID, 3, 0)
+	// 2. Pin
+	err = c.Pin(ctx, result.CID, 3, time.Second)
 	if err != nil {
-		t.Fatalf("Pin: %v", err)
+		t.Fatalf("Pin failed: %v", err)
 	}
 
-	// Cat
-	rc, err := client.Cat(ctx, result.CID)
+	// 3. Cat — читаем содержимое
+	r, err := c.Cat(ctx, result.CID)
 	if err != nil {
-		t.Fatalf("Cat: %v", err)
+		t.Fatalf("Cat failed: %v", err)
 	}
-	defer rc.Close()
+	defer r.Close()
 
-	// Unpin
-	err = client.Unpin(ctx, result.CID)
+	got, err := io.ReadAll(r)
 	if err != nil {
-		t.Fatalf("Unpin: %v", err)
+		t.Fatalf("ReadAll failed: %v", err)
 	}
-	t.Logf("Unpin OK: %s", result.CID)
+	if !bytes.Equal(got, content) {
+		t.Fatalf("content mismatch: got %q, want %q", got, content)
+	}
+
+	// 4. Unpin
+	err = c.Unpin(ctx, result.CID)
+	if err != nil {
+		t.Fatalf("Unpin failed: %v", err)
+	}
 }
 
 func TestClient_Stat(t *testing.T) {
-	url := ipfsURL(t)
-
-	client, err := New(url)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
+	c := getTestClient(t)
 	ctx := context.Background()
 
-	// Add сначала чтобы был CID
-	result, err := client.Add(ctx, "stat-test.txt", strings.NewReader("stat test content"))
+	content := []byte("stat test content")
+	result, err := c.Add(ctx, "stat-test.txt", bytes.NewReader(content))
 	if err != nil {
-		t.Fatalf("Add: %v", err)
+		t.Fatalf("Add failed: %v", err)
 	}
 
-	stat, err := client.Stat(ctx, result.CID)
+	stat, err := c.Stat(ctx, result.CID)
 	if err != nil {
-		t.Fatalf("Stat: %v", err)
+		t.Fatalf("Stat failed: %v", err)
 	}
 	if stat.CID != result.CID {
-		t.Errorf("Stat CID mismatch: got %s, want %s", stat.CID, result.CID)
+		t.Fatalf("CID mismatch: got %s, want %s", stat.CID, result.CID)
 	}
-	t.Logf("Stat: CID=%s Size=%d Type=%s", stat.CID, stat.Size, stat.Type)
+	t.Logf("Stat: CID=%s Size=%d", stat.CID, stat.Size)
+}
+
+func TestClient_Pin_Idempotent(t *testing.T) {
+	c := getTestClient(t)
+	ctx := context.Background()
+
+	content := []byte("idempotent pin test")
+	result, err := c.Add(ctx, "idempotent.txt", bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	// Pin дважды — не должно быть ошибки
+	if err := c.Pin(ctx, result.CID, 3, time.Second); err != nil {
+		t.Fatalf("first Pin failed: %v", err)
+	}
+	if err := c.Pin(ctx, result.CID, 3, time.Second); err != nil {
+		t.Fatalf("second Pin (idempotent) failed: %v", err)
+	}
+
+	// Cleanup
+	_ = c.Unpin(ctx, result.CID)
 }
