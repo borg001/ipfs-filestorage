@@ -53,29 +53,3 @@ func CORS(allowedOrigins []string, allowedHeaders []string) Middleware {
 		})
 	}
 }
-
-// APIKeyAuth validates the X-API-Key header against a whitelist of keys.
-func APIKeyAuth(validKeys []string) Middleware {
-	keysMap := make(map[string]struct{}, len(validKeys))
-	for _, k := range validKeys {
-		keysMap[k] = struct{}{}
-	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			apiKey := r.Header.Get("X-API-Key")
-			if apiKey == "" {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte(`{"error":"API key is required"}`))
-				return
-			}
-			if _, ok := keysMap[apiKey]; !ok {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"error":"Invalid API key"}`))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}

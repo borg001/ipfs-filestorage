@@ -29,38 +29,6 @@ func TestPanicRecovery(t *testing.T) {
 	}
 }
 
-func TestAPIKeyAuth_Missing(t *testing.T) {
-	handler := APIKeyAuth([]string{"secret"})(okHandler())
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rr.Code)
-	}
-}
-
-func TestAPIKeyAuth_Invalid(t *testing.T) {
-	handler := APIKeyAuth([]string{"secret"})(okHandler())
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-API-Key", "wrong")
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", rr.Code)
-	}
-}
-
-func TestAPIKeyAuth_Valid(t *testing.T) {
-	handler := APIKeyAuth([]string{"secret"})(okHandler())
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-API-Key", "secret")
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-}
-
 func TestCORS(t *testing.T) {
 	handler := CORS([]string{"http://test.com"}, []string{"Content-Type", "X-API-Key"})(okHandler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -97,5 +65,37 @@ func TestChain(t *testing.T) {
 	}
 	if rr.Body.String() != "ok" {
 		t.Fatalf("expected ok, got %s", rr.Body.String())
+	}
+}
+
+func TestAPIKeyAuth_Missing(t *testing.T) {
+	handler := APIKeyAuth([]string{"secret"})(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestAPIKeyAuth_Invalid(t *testing.T) {
+	handler := APIKeyAuth([]string{"secret"})(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-API-Key", "wrong")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rr.Code)
+	}
+}
+
+func TestAPIKeyAuth_Valid(t *testing.T) {
+	handler := APIKeyAuth([]string{"secret"})(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-API-Key", "secret")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }
