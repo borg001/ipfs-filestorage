@@ -40,8 +40,8 @@ func TestCORS(t *testing.T) {
 	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "http://test.com" {
 		t.Fatalf("expected origin \"http://test.com\", got %s", got)
 	}
-	if got := rr.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, X-API-Key" {
-		t.Fatalf("expected headers, got %s", got)
+	if got := rr.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type,X-API-Key" {
+		t.Fatalf("expected headers Content-Type,X-API-Key, got %s", got)
 	}
 }
 
