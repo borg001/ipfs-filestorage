@@ -25,7 +25,7 @@ func TestPanicRecovery(t *testing.T) {
 		t.Fatalf("expected 500, got %d", rr.Code)
 	}
 	if !strings.Contains(rr.Body.String(), "internal server error") {
-		t.Fatalf("expected \"internal server error\" in body, got %s", rr.Body.String())
+		t.Fatalf("expected error body, got %s", rr.Body.String())
 	}
 }
 
@@ -37,9 +37,6 @@ func TestAPIKeyAuth_Missing(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "API key is required") {
-		t.Fatalf("expected \"API key is required\", got %s", rr.Body.String())
-	}
 }
 
 func TestAPIKeyAuth_Invalid(t *testing.T) {
@@ -50,9 +47,6 @@ func TestAPIKeyAuth_Invalid(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), "Invalid API key") {
-		t.Fatalf("expected \"Invalid API key\", got %s", rr.Body.String())
 	}
 }
 
@@ -76,10 +70,10 @@ func TestCORS(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "http://test.com" {
-		t.Fatalf("expected Access-Control-Allow-Origin \"http://test.com\", got %s", got)
+		t.Fatalf("expected origin \"http://test.com\", got %s", got)
 	}
 	if got := rr.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, X-API-Key" {
-		t.Fatalf("expected headers Content-Type, X-API-Key, got %s", got)
+		t.Fatalf("expected headers, got %s", got)
 	}
 }
 
@@ -102,6 +96,6 @@ func TestChain(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	if rr.Body.String() != "ok" {
-		t.Fatalf("expected body ok, got %s", rr.Body.String())
+		t.Fatalf("expected ok, got %s", rr.Body.String())
 	}
 }

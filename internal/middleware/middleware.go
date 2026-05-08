@@ -10,7 +10,7 @@ import (
 // Middleware is a standard HTTP middleware function.
 type Middleware func(http.Handler) http.Handler
 
-// Chain wraps a handler with a list of middlewares.
+// Chain wraps a handler with a list of middlewares from outer to inner.
 func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		h = middlewares[i](h)
@@ -18,7 +18,7 @@ func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
 	return h
 }
 
-// PanicRecovery recovers from panics, logs them, and returns 500.
+// PanicRecovery recovers from panics, writes them to stderr and returns 500.
 func PanicRecovery() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +26,8 @@ func PanicRecovery() Middleware {
 				if rec := recover(); rec != nil {
 					fmt.Fprintf(os.Stderr, "[PANIC] %s %s: %v\n", r.Method, r.URL.Path, rec)
 					w.Header().Set("Content-Type", "application/json")
-					http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(`{"error":"internal server error"}`))
 				}
 			}()
 			next.ServeHTTP(w, r)
@@ -53,7 +54,7 @@ func CORS(allowedOrigins []string, allowedHeaders []string) Middleware {
 	}
 }
 
-// APIKeyAuth validates X-API-Key header against a whitelist of keys.
+// APIKeyAuth validates the X-API-Key header against a whitelist of keys.
 func APIKeyAuth(validKeys []string) Middleware {
 	keysMap := make(map[string]struct{}, len(validKeys))
 	for _, k := range validKeys {
