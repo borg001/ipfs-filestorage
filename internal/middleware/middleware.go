@@ -1,1 +1,80 @@
 package middleware
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+)
+
+// Middleware is a standard HTTP middleware function.
+type Middleware func(http.Handler) http.Handler
+
+// Chain wraps a handler with a list of middlewares.
+func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		h = middlewares[i](h)
+	}
+	return h
+}
+
+// PanicRecovery recovers from panics, logs them, and returns 500.
+func PanicRecovery() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					fmt.Fprintf(os.Stderr, "[PANIC] %s %s: %v\n", r.Method, r.URL.Path, rec)
+					w.Header().Set("Content-Type", "application/json")
+					http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// CORS sets configurable CORS headers and handles OPTIONS pre-flight.
+func CORS(allowedOrigins []string, allowedHeaders []string) Middleware {
+	originStr := strings.Join(allowedOrigins, ",")
+	headerStr := strings.Join(allowedHeaders, ",")
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", originStr)
+			w.Header().Set("Access-Control-Allow-Headers", headerStr)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			if r.Method == http.MethodOptions {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// APIKeyAuth validates X-API-Key header against a whitelist of keys.
+func APIKeyAuth(validKeys []string) Middleware {
+	keysMap := make(map[string]struct{}, len(validKeys))
+	for _, k := range validKeys {
+		keysMap[k] = struct{}{}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			apiKey := r.Header.Get("X-API-Key")
+			if apiKey == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{"error":"API key is required"}`))
+				return
+			}
+			if _, ok := keysMap[apiKey]; !ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"error":"Invalid API key"}`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
