@@ -1,41 +1,36 @@
 #!/bin/sh
 set -e
 
-# IPFS init script for docker containers
-# Usage: ipfs-init.sh <peer_multiaddr>
-
-REPO=${IPFS_PATH:-/data/ipfs}
-BOOTSTRAP_PEER=${1:-}
-
-if [ ! -f "$REPO/config" ]; then
-    echo "Initializing IPFS repo at $REPO"
-    ipfs init --profile=lowpower
+# Initialize IPFS repo if not exists
+if [ ! -f "$IPFS_PATH/config" ]; then
+    ipfs init --profile=server
     
     # Configure API to listen on all interfaces
     ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
     ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
     
-    # Disable unwanted services for storage-only node
-    ipfs config --json Swarm.DisableNatPortMap true
-    ipfs config --json Swarm.RelayClient.Enabled false
-    ipfs config --json Swarm.RelayService.Enabled false
-    ipfs config --json AutoNAT.ServiceMode false
-    ipfs config --json Discovery.MDNS.Enabled false
+    # Configure swarm to listen on all interfaces
+    ipfs config Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001"]'
     
-    # Bootstrap to peer if provided
-    if [ -n "$BOOTSTRAP_PEER" ]; then
-        echo "Adding bootstrap peer: $BOOTSTRAP_PEER"
+    # Add bootstrap peers if provided
+    if [ -n "$IPFS_BOOTSTRAP" ]; then
         ipfs bootstrap rm --all
-        ipfs bootstrap add "$BOOTSTRAP_PEER"
+        for peer in $(echo "$IPFS_BOOTSTRAP" | tr ',' '\n'); do
+            ipfs bootstrap add "$peer"
+        done
     fi
     
-    # Copy swarm key if present
-    if [ -f /key/swarm.key ]; then
-        echo "Installing swarm key"
-        mkdir -p "$REPO"
-        cp /key/swarm.key "$REPO/swarm.key"
+    # Add swarm key if provided
+    if [ -n "$IPFS_SWARM_KEY" ]; then
+        echo "$IPFS_SWARM_KEY" > "$IPFS_PATH/swarm.key"
     fi
+    
+    # Enable pubsub for peer discovery
+    ipfs config --json Pubsub.Enabled true
+    
+    # Configure routing for better peer discovery
+    ipfs config Routing.Type dhtclient
 fi
 
-# Start daemon
-exec ipfs daemon --migrate=true
+# Start IPFS daemon
+exec ipfs daemon --migrate=true "$@"
