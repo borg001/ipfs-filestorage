@@ -58,7 +58,6 @@ func (h *Handler) Router(method string) http.HandlerFunc {
 func (h *Handler) getHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/upload":
-		// GET /upload — не поддерживается
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Use POST"})
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Not found"})
@@ -103,7 +102,7 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Валидация типа
-	if err := validateFile(header.Filename, header.Header.Get("Content-Type")); err != nil {
+	if err := h.validateFile(header.Filename, header.Header.Get("Content-Type")); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"error":        err.Error(),
 			"allowedTypes": h.cfg.AllowedExtensions,
@@ -157,7 +156,7 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if err := validateFile(fh.Filename, fh.Header.Get("Content-Type")); err != nil {
+		if err := h.validateFile(fh.Filename, fh.Header.Get("Content-Type")); err != nil {
 			invalid = append(invalid, fh.Filename)
 		}
 	}
@@ -225,11 +224,10 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-func validateFile(filename string, contentType string) error {
+func (h *Handler) validateFile(filename string, contentType string) error {
 	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
 	ext = strings.ToLower(ext)
 	allowedExt := false
-	h.cfg := config.Load()
 	for _, e := range h.cfg.AllowedExtensions {
 		if e == ext {
 			allowedExt = true
@@ -242,10 +240,10 @@ func validateFile(filename string, contentType string) error {
 	if contentType == "" || contentType == "application/octet-stream" {
 		contentType = mime.TypeByExtension(filepath.Ext(filename))
 	}
-	if _, ok := cfg.Upload.AllowedMimeTypes[contentType]; !ok {
+	if _, ok := h.cfg.AllowedMimeTypes[contentType]; !ok {
 		ct := mime.TypeByExtension("." + ext)
 		if ct != "" {
-			if _, ok := cfg.Upload.AllowedMimeTypes[ct]; ok {
+			if _, ok := h.cfg.AllowedMimeTypes[ct]; ok {
 				return nil
 			}
 		}
