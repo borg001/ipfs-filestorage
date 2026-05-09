@@ -1,0 +1,130 @@
+version: "3.9"
+
+services:
+  ipfs1:
+    image: ipfs/kubo:latest
+    profiles: ["compose"]
+    container_name: ipfs1
+    hostname: ipfs1
+    volumes:
+      - ipfs1-data:/data/ipfs
+    environment:
+      - IPFS_SWARM_KEY=/key/swarm.key
+      - IPFS_PATH=/data/ipfs
+    command: ["daemon", "--enable-pubsub-experiment", "--routing=dhtclient"]
+    networks:
+      - storage-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  ipfs2:
+    image: ipfs/kubo:latest
+    profiles: ["compose"]
+    container_name: ipfs2
+    hostname: ipfs2
+    volumes:
+      - ipfs2-data:/data/ipfs
+    environment:
+      - IPFS_SWARM_KEY=/key/swarm.key
+      - IPFS_PATH=/data/ipfs
+    command: ["daemon", "--enable-pubsub-experiment", "--routing=dhtclient"]
+    networks:
+      - storage-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  storage1:
+    build: .
+    profiles: ["compose"]
+    container_name: storage1
+    hostname: storage1
+    environment:
+      - SERVER_PORT=3000
+      - IPFS_URL=http://ipfs1:5001
+      - CLUSTER_NODES=http://ipfs1:5001,http://ipfs2:5001
+      - API_KEYS=SECRET_KEY_1,SECRET_KEY_2
+      - UPLOAD_MAX_FILE_SIZE=10485760
+      - UPLOAD_ALLOWED_EXTENSIONS=png,svg,jpg,pdf,doc,docx,zip,json,html
+      - PINNING_RETRIES=3
+      - PINNING_RETRY_DELAY_MS=1000
+      - UNPIN_TTL=24h
+      - UNPIN_GC_INTERVAL=1h
+      - UNPIN_STORE_PATH=/data/unpin-store.json
+      - CORS_ALLOWED_ORIGINS=*
+      - CORS_ALLOWED_HEADERS=Origin,X-Requested-With,Content-Type,Accept,X-API-Key
+    volumes:
+      - unpin-data:/data
+    depends_on:
+      - ipfs1
+      - ipfs2
+    networks:
+      - storage-net
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  storage2:
+    build: .
+    profiles: ["compose"]
+    container_name: storage2
+    hostname: storage2
+    environment:
+      - SERVER_PORT=3000
+      - IPFS_URL=http://ipfs2:5001
+      - CLUSTER_NODES=http://ipfs1:5001,http://ipfs2:5001
+      - API_KEYS=SECRET_KEY_1,SECRET_KEY_2
+      - UPLOAD_MAX_FILE_SIZE=10485760
+      - UPLOAD_ALLOWED_EXTENSIONS=png,svg,jpg,pdf,doc,docx,zip,json,html
+      - PINNING_RETRIES=3
+      - PINNING_RETRY_DELAY_MS=1000
+      - UNPIN_TTL=24h
+      - UNPIN_GC_INTERVAL=1h
+      - UNPIN_STORE_PATH=/data/unpin-store.json
+      - CORS_ALLOWED_ORIGINS=*
+      - CORS_ALLOWED_HEADERS=Origin,X-Requested-With,Content-Type,Accept,X-API-Key
+    volumes:
+      - unpin-data:/data
+    depends_on:
+      - ipfs1
+      - ipfs2
+    networks:
+      - storage-net
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  nginx:
+    image: nginx:alpine
+    profiles: ["compose"]
+    container_name: nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - storage1
+      - storage2
+    networks:
+      - storage-net
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+volumes:
+  ipfs1-data:
+  ipfs2-data:
+  unpin-data:
+
+networks:
+  storage-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
