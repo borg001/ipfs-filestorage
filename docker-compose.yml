@@ -12,7 +12,8 @@ services:
       - IPFS_PATH=/data/ipfs
       - IPFS_PROFILE=lowpower
       - IPFS_SWARM_KEY=/key/swarm.key
-    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh", "/dns4/ipfs2/tcp/4001/p2p/12D3KooWPeer2"]
+      - IPFS_SWARM_CONNECT=/dns4/ipfs2/tcp/4001/p2p/12D3KooWPeer2
+    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh"]
     networks:
       - storage-net
     healthcheck:
@@ -33,7 +34,8 @@ services:
       - IPFS_PATH=/data/ipfs
       - IPFS_PROFILE=lowpower
       - IPFS_SWARM_KEY=/key/swarm.key
-    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh", "/dns4/ipfs1/tcp/4001/p2p/12D3KooWPeer1"]
+      - IPFS_SWARM_CONNECT=/dns4/ipfs1/tcp/4001/p2p/12D3KooWPeer1
+    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh"]
     networks:
       - storage-net
     healthcheck:
