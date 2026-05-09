@@ -1,0 +1,129 @@
+version: "3.9"
+
+services:
+  ipfs1:
+    image: ipfs/kubo:latest
+    container_name: ipfs1
+    volumes:
+      - ipfs1-data:/data/ipfs
+      - ./swarm.key:/key/swarm.key:ro
+      - ./scripts/ipfs-init.sh:/usr/local/bin/ipfs-init.sh:ro
+    environment:
+      - IPFS_PATH=/data/ipfs
+      - IPFS_PROFILE=lowpower
+      - IPFS_SWARM_KEY=/key/swarm.key
+      - IPFS_SWARM_CONNECT=/dns4/ipfs2/tcp/4001/p2p/12D3KooWPeer2
+    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh"]
+    networks:
+      - storage-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/api/v0/id"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ipfs2:
+    image: ipfs/kubo:latest
+    container_name: ipfs2
+    volumes:
+      - ipfs2-data:/data/ipfs
+      - ./swarm.key:/key/swarm.key:ro
+      - ./scripts/ipfs-init.sh:/usr/local/bin/ipfs-init.sh:ro
+    environment:
+      - IPFS_PATH=/data/ipfs
+      - IPFS_PROFILE=lowpower
+      - IPFS_SWARM_KEY=/key/swarm.key
+      - IPFS_SWARM_CONNECT=/dns4/ipfs1/tcp/4001/p2p/12D3KooWPeer1
+    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh"]
+    networks:
+      - storage-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/api/v0/id"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  storage1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: storage1
+    environment:
+      - SERVER_PORT=3000
+      - IPFS_URL=http://ipfs1:5001
+      - CLUSTER_NODES=http://ipfs1:5001,http://ipfs2:5001
+      - API_KEYS=SECRET_KEY_1,SECRET_KEY_2
+      - UPLOAD_MAX_FILE_SIZE=10485760
+      - UPLOAD_ALLOWED_EXTENSIONS=png,svg,jpg,pdf,doc,docx,zip,json,html
+      - PINNING_RETRIES=3
+      - PINNING_RETRY_DELAY_MS=1000
+      - UNPIN_TTL=24h
+      - UNPIN_GC_INTERVAL=1h
+      - UNPIN_STORE_PATH=/data/unpin-store.json
+      - CORS_ALLOWED_ORIGINS=*
+      - CORS_ALLOWED_HEADERS=Origin,X-Requested-With,Content-Type,Accept,X-API-Key
+    volumes:
+      - unpin-data:/data
+    networks:
+      - storage-net
+    depends_on:
+      ipfs1:
+        condition: service_healthy
+      ipfs2:
+        condition: service_healthy
+
+  storage2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: storage2
+    environment:
+      - SERVER_PORT=3000
+      - IPFS_URL=http://ipfs2:5001
+      - CLUSTER_NODES=http://ipfs1:5001,http://ipfs2:5001
+      - API_KEYS=SECRET_KEY_1,SECRET_KEY_2
+      - UPLOAD_MAX_FILE_SIZE=10485760
+      - UPLOAD_ALLOWED_EXTENSIONS=png,svg,jpg,pdf,doc,docx,zip,json,html
+      - PINNING_RETRIES=3
+      - PINNING_RETRY_DELAY_MS=1000
+      - UNPIN_TTL=24h
+      - UNPIN_GC_INTERVAL=1h
+      - UNPIN_STORE_PATH=/data/unpin-store.json
+      - CORS_ALLOWED_ORIGINS=*
+      - CORS_ALLOWED_HEADERS=Origin,X-Requested-With,Content-Type,Accept,X-API-Key
+    volumes:
+      - unpin-data:/data
+    networks:
+      - storage-net
+    depends_on:
+      ipfs1:
+        condition: service_healthy
+      ipfs2:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - storage-net
+    depends_on:
+      - storage1
+      - storage2
+
+volumes:
+  ipfs1-data:
+  ipfs2-data:
+  unpin-data:
+
+networks:
+  storage-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
