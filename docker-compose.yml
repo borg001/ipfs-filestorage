@@ -3,45 +3,51 @@ version: "3.9"
 services:
   ipfs1:
     image: ipfs/kubo:latest
-    profiles: ["compose"]
     container_name: ipfs1
-    hostname: ipfs1
     volumes:
       - ipfs1-data:/data/ipfs
+      - ./swarm.key:/key/swarm.key:ro
+      - ./scripts/ipfs-init.sh:/usr/local/bin/ipfs-init.sh:ro
     environment:
-      - IPFS_SWARM_KEY=/key/swarm.key
       - IPFS_PATH=/data/ipfs
-    command: ["daemon", "--enable-pubsub-experiment", "--routing=dhtclient"]
+      - IPFS_PROFILE=lowpower
+      - IPFS_SWARM_KEY=/key/swarm.key
+    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh", "/dns4/ipfs2/tcp/4001/p2p/12D3KooWPeer2"]
     networks:
       - storage-net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/api/v0/id"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   ipfs2:
     image: ipfs/kubo:latest
-    profiles: ["compose"]
     container_name: ipfs2
-    hostname: ipfs2
     volumes:
       - ipfs2-data:/data/ipfs
+      - ./swarm.key:/key/swarm.key:ro
+      - ./scripts/ipfs-init.sh:/usr/local/bin/ipfs-init.sh:ro
     environment:
-      - IPFS_SWARM_KEY=/key/swarm.key
       - IPFS_PATH=/data/ipfs
-    command: ["daemon", "--enable-pubsub-experiment", "--routing=dhtclient"]
+      - IPFS_PROFILE=lowpower
+      - IPFS_SWARM_KEY=/key/swarm.key
+    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh", "/dns4/ipfs1/tcp/4001/p2p/12D3KooWPeer1"]
     networks:
       - storage-net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/api/v0/id"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   storage1:
-    build: .
-    profiles: ["compose"]
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: storage1
-    hostname: storage1
     environment:
       - SERVER_PORT=3000
       - IPFS_URL=http://ipfs1:5001
@@ -58,21 +64,19 @@ services:
       - CORS_ALLOWED_HEADERS=Origin,X-Requested-With,Content-Type,Accept,X-API-Key
     volumes:
       - unpin-data:/data
-    depends_on:
-      - ipfs1
-      - ipfs2
     networks:
       - storage-net
-    deploy:
-      resources:
-        limits:
-          memory: 128M
+    depends_on:
+      ipfs1:
+        condition: service_healthy
+      ipfs2:
+        condition: service_healthy
 
   storage2:
-    build: .
-    profiles: ["compose"]
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: storage2
-    hostname: storage2
     environment:
       - SERVER_PORT=3000
       - IPFS_URL=http://ipfs2:5001
@@ -89,33 +93,26 @@ services:
       - CORS_ALLOWED_HEADERS=Origin,X-Requested-With,Content-Type,Accept,X-API-Key
     volumes:
       - unpin-data:/data
-    depends_on:
-      - ipfs1
-      - ipfs2
     networks:
       - storage-net
-    deploy:
-      resources:
-        limits:
-          memory: 128M
+    depends_on:
+      ipfs1:
+        condition: service_healthy
+      ipfs2:
+        condition: service_healthy
 
   nginx:
     image: nginx:alpine
-    profiles: ["compose"]
     container_name: nginx
     ports:
       - "8080:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - storage-net
     depends_on:
       - storage1
       - storage2
-    networks:
-      - storage-net
-    deploy:
-      resources:
-        limits:
-          memory: 64M
 
 volumes:
   ipfs1-data:
