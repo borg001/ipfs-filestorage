@@ -1,0 +1,103 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/borg001/ipfs-filestorage/internal/config"
+)
+
+// mockCluster реализует тот же интерфейс что ClusterManager
+type mockCluster struct {
+	mu       sync.Mutex
+	files    map[string][]byte // CID -> content
+	pinned   map[string]bool   // CID -> pinned
+	nodeAddr map[string]string // CID -> node URL
+}
+
+func newMockCluster() *mockCluster {
+	return &mockCluster{
+		files:    make(map[string][]byte),
+		pinned:   make(map[string]bool),
+		nodeAddr: make(map[string]string),
+	}
+}
+
+func (m *mockCluster) ClusterAdd(ctx context.Context, filename string, r io.Reader) (string, int64, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return "", 0, err
+	}
+	cid := fmt.Sprintf("Qm%s", hash(data))
+	m.mu.Lock()
+	m.files[cid] = data
+	m.mu.Unlock()
+	return cid, int64(len(data)), nil
+}
+
+func (m *mockCluster) ClusterPinAll(ctx context.Context, cid string, retries int, delay time.Duration) (bool, error) {
+	m.mu.Lock()
+	m.pinned[cid] = true
+	m.mu.Unlock()
+	return true, nil
+}
+
+func (m *mockCluster) ClusterPinAllExcept(ctx context.Context, cid string, skipURL string, retries int, delay time.Duration) (bool, error) {
+	return m.ClusterPinAll(ctx, cid, retries, delay)
+}
+
+func (m *mockCluster) ClusterCat(ctx context.Context, cid string) (io.ReadCloser, int64, error) {
+	m.mu.Lock()
+	data, ok := m.files[cid]
+	m.mu.Unlock()
+	if !ok {
+		return nil, 0, fmt.Errorf("file not found")
+	}
+	return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+}
+
+func (m *mockCluster) ClusterStat(ctx context.Context, cid string) (*ipfs.StatResult, error) {
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *mockCluster) ClusterUnpinAll(ctx context.Context, cid string) error {
+	m.mu.Lock()
+	delete(m.pinned, cid)
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *mockCluster) ClusterIsPinnedAll(ctx context.Context, cid string) (bool, error) {
+	m.mu.Lock()
+	ok := m.pinned[cid]
+	m.mu.Unlock()
+	return ok, nil
+}
+
+func (m *mockCluster) ClusterTryFetch(ctx context.Context, cid string) (io.ReadCloser, int64, string, error) {
+	return m.ClusterCat(ctx, cid)
+}
+
+// Простой hash для mock CID
+var hashCounter int
+var hashMu sync.Mutex
+
+func hash(data []byte) string {
+	hashMu.Lock()
+	defer hashMu.Unlock()
+	hashCounter++
+	return fmt.Sprintf("mock%d%x", hashCounter, len(data))
+}
+
+// Создаёт тестовый handler с mock cluster
+func setupTestHandler(cfg *config.Config, cluster *mockCluster) *Handler {
+	h := &Handler{cfg: cfg, cluster: cluster}
+	return h
+}
