@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	apiKey   = "SECRET_KEY_1"
-	baseURL  = "http://localhost:8080" // nginx proxy
+	apiKey  = "SECRET_KEY_1"
+	baseURL = "http://localhost:8080"
 )
 
 func TestUploadAndDownload(t *testing.T) {
