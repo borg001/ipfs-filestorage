@@ -27,6 +27,9 @@ services:
   ipfs1:
     image: ipfs/kubo:latest
     container_name: ipfs1
+    ports:
+      - "5001:5001"   # IPFS API (for direct access / integration tests)
+      - "4001:4001"   # Swarm TCP
     volumes:
       - ipfs1-data:/data/ipfs
       - ./swarm.key:/key/swarm.key:ro
@@ -53,6 +56,9 @@ services:
   ipfs2:
     image: ipfs/kubo:latest
     container_name: ipfs2
+    ports:
+      - "5002:5001"   # IPFS API on host port 5002 (for integration tests)
+      - "4002:4001"   # Swarm TCP on host port 4002
     volumes:
       - ipfs2-data:/data/ipfs
       - ./swarm.key:/key/swarm.key:ro
@@ -81,6 +87,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: storage1
+    ports:
+      - "3001:3000"   # Storage1 API on host port 3001
     env_file:
       - .env
     environment:
@@ -103,6 +111,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: storage2
+    ports:
+      - "3002:3000"   # Storage2 API on host port 3002
     env_file:
       - .env
     environment:
