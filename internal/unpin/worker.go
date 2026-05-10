@@ -11,12 +11,12 @@ import (
 
 // Worker фоновый сборщик мусора для unpin-списка
 type Worker struct {
-	cluster    *ipfs.ClusterManager
-	store      *store.UnpinStore
-	ttl        time.Duration
-	interval   time.Duration
-	stopChan   chan struct{}
-	running    bool
+	cluster  *ipfs.ClusterManager
+	store    *store.UnpinStore
+	ttl      time.Duration
+	interval time.Duration
+	stopChan chan struct{}
+	running  bool
 }
 
 // NewWorker создаёт новый worker
@@ -76,7 +76,7 @@ func (w *Worker) gc() {
 
 	ctx := context.Background()
 	for _, cid := range expired {
-		if err := w.cluster.ClusterUnpinAll(ctx, cid, 3, 500*time.Millisecond); err != nil {
+		if err := w.cluster.ClusterUnpinAll(ctx, cid); err != nil {
 			log.Printf("[unpin-worker] failed to unpin %s: %v", cid, err)
 			continue
 		}
