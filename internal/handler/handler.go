@@ -1,13 +1,12 @@
 package handler
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -94,7 +93,7 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Загрузка и репликация
+	// Загрузка на первую ноду
 	ctx := r.Context()
 	cid, _, err := h.cluster.ClusterAdd(ctx, header.Filename, file)
 	if err != nil {
@@ -102,10 +101,10 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Репликация на все ноды кластера (Fetch + Pin)
 	retryDelay := time.Duration(h.cfg.PinningRetryDelay) * time.Millisecond
-	_, err = h.cluster.ClusterPinAll(ctx, cid, h.cfg.PinningRetries, retryDelay)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Pinning failed"})
+	if err := h.cluster.ClusterReplicate(ctx, cid, h.cfg.PinningRetries, retryDelay); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Replication failed"})
 		return
 	}
 
@@ -183,7 +182,8 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			_, _ = h.cluster.ClusterPinAll(ctx, cid, h.cfg.PinningRetries, retryDelay)
+			// Репликация на все ноды кластера (Fetch + Pin)
+			_ = h.cluster.ClusterReplicate(ctx, cid, h.cfg.PinningRetries, retryDelay)
 
 			mu.Lock()
 			results[idx] = Response{
@@ -228,21 +228,22 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Пытаемся получить данные из кластера
-	data, err := h.cluster.ClusterTryFetch(ctx, cid)
+	reader, err := h.cluster.ClusterTryFetch(ctx, cid)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}
+	defer reader.Close()
 
-	// Определяем Content-Type
+	// Определяем Content-Length через Stat
 	stat, err := h.cluster.ClusterStat(ctx, cid)
-	if err == nil && stat.CumulativeSize > 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(stat.CumulativeSize, 10))
+	if err == nil && stat.Size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatUint(stat.Size, 10))
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	io.Copy(w, reader)
 }
 
 // HandleDelete обрабатывает DELETE /file/{cid}.
@@ -256,9 +257,10 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	// Добавляем в unpin-список (soft-delete)
 	h.unpinStore.Add(cid)
 
+	// Асинхронный unpin на всех нодах
 	ctx := r.Context()
 	go func() {
-		h.cluster.ClusterUnpinAll(ctx, cid, 3, 500*time.Millisecond)
+		h.cluster.ClusterUnpinAll(ctx, cid)
 	}()
 
 	writeJSON(w, http.StatusOK, map[string]string{
