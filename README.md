@@ -44,12 +44,21 @@ HTTP-сервис для децентрализованного хранения
 ```bash
 git clone https://github.com/borg001/ipfs-filestorage.git
 cd ipfs-filestorage
+
+# Скопируйте шаблон конфигурации и настройте под себя
+cp .env.example .env
+# nano .env  # опционально: поменяйте API_KEYS и другие параметры
+
 docker-compose up --build
 ```
 
 API будет доступен на `http://localhost:8080`.
 
+> **💡 Примечание:** docker-compose автоматически подхватывает файл `.env` рядом с ним. Все переменные из этого файла применяются к сервисам `storage1` и `storage2`. Если `.env` не создан — используются значения по умолчанию.
+
 ## Конфигурация
+
+Конфигурация задаётся через **`.env` файл** (шаблон: `.env.example`).
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
@@ -65,7 +74,16 @@ API будет доступен на `http://localhost:8080`.
 | `UNPIN_GC_INTERVAL` | `1h` | Интервал запуска GC-воркера |
 | `UNPIN_STORE_PATH` | `/data/unpin-store.json` | Путь к хранилищу unpin-списка |
 | `CORS_ALLOWED_ORIGINS` | `*` | Разрешённые origins |
-| `CORS_ALLOWED_HEADERS` | `Origin,...,X-API-Key` | Разрешённые заголовки |
+| `CORS_ALLOWED_HEADERS` | `Origin,X-Requested-With,Content-Type,Accept,X-API-Key` | Разрешённые заголовки |
+
+### Пример `.env`
+
+```env
+API_KEYS=my-secret-key-123,another-key-456
+UPLOAD_MAX_FILE_SIZE=52428800
+UPLOAD_ALLOWED_EXTENSIONS=png,jpg,pdf,mp4
+CORS_ALLOWED_ORIGINS=https://myapp.com,https://admin.myapp.com
+```
 
 ## API
 
