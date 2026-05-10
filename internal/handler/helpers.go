@@ -1,12 +1,10 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
-	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -26,7 +24,7 @@ func validateFile(filename string, contentType string, cfg *config.Config) error
 	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
 	ext = strings.ToLower(ext)
 	allowedExt := false
-	for _, e := range cfg.AllowedExtensions {
+	for _, e := range cfg.Upload.AllowedExtensions {
 		if e == ext {
 			allowedExt = true
 			break
@@ -41,11 +39,11 @@ func validateFile(filename string, contentType string, cfg *config.Config) error
 		contentType = mime.TypeByExtension(filepath.Ext(filename))
 	}
 
-	if _, ok := cfg.AllowedMimeTypes[contentType]; !ok {
+	if _, ok := cfg.Upload.AllowedMimeTypes[contentType]; !ok {
 		// Fallback: если Content-Type не найден — проверяем по расширению
 		ct := mime.TypeByExtension("." + ext)
 		if ct != "" {
-			if _, ok := cfg.AllowedMimeTypes[ct]; ok {
+			if _, ok := cfg.Upload.AllowedMimeTypes[ct]; ok {
 				return nil
 			}
 		}
