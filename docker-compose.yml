@@ -50,20 +50,12 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: storage1
+    env_file:
+      - .env
     environment:
-      - SERVER_PORT=3000
+      - SERVER_PORT=${SERVER_PORT:-3000}
       - IPFS_URL=http://ipfs1:5001
-      - CLUSTER_NODES=http://ipfs1:5001,http://ipfs2:5001
-      - API_KEYS=SECRET_KEY_1,SECRET_KEY_2
-      - UPLOAD_MAX_FILE_SIZE=10485760
-      - UPLOAD_ALLOWED_EXTENSIONS=png,svg,jpg,pdf,doc,docx,zip,json,html
-      - PINNING_RETRIES=3
-      - PINNING_RETRY_DELAY_MS=1000
-      - UNPIN_TTL=24h
-      - UNPIN_GC_INTERVAL=1h
-      - UNPIN_STORE_PATH=/data/unpin-store.json
-      - CORS_ALLOWED_ORIGINS=*
-      - CORS_ALLOWED_HEADERS=Origin,X-Requested-With,Content-Type,Accept,X-API-Key
+      - CLUSTER_NODES=${CLUSTER_NODES:-http://ipfs1:5001,http://ipfs2:5001}
     volumes:
       - unpin-data:/data
     networks:
@@ -79,20 +71,12 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: storage2
+    env_file:
+      - .env
     environment:
-      - SERVER_PORT=3000
+      - SERVER_PORT=${SERVER_PORT:-3000}
       - IPFS_URL=http://ipfs2:5001
-      - CLUSTER_NODES=http://ipfs1:5001,http://ipfs2:5001
-      - API_KEYS=SECRET_KEY_1,SECRET_KEY_2
-      - UPLOAD_MAX_FILE_SIZE=10485760
-      - UPLOAD_ALLOWED_EXTENSIONS=png,svg,jpg,pdf,doc,docx,zip,json,html
-      - PINNING_RETRIES=3
-      - PINNING_RETRY_DELAY_MS=1000
-      - UNPIN_TTL=24h
-      - UNPIN_GC_INTERVAL=1h
-      - UNPIN_STORE_PATH=/data/unpin-store.json
-      - CORS_ALLOWED_ORIGINS=*
-      - CORS_ALLOWED_HEADERS=Origin,X-Requested-With,Content-Type,Accept,X-API-Key
+      - CLUSTER_NODES=${CLUSTER_NODES:-http://ipfs1:5001,http://ipfs2:5001}
     volumes:
       - unpin-data:/data
     networks:
