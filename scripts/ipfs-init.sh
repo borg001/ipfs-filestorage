@@ -16,6 +16,7 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     ipfs config Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001"]'
 
     # Full DHT — storage nodes MUST provide content, not just query
+    # dhtclient only queries — files added on this node won't be announced!
     ipfs config Routing.Type dht
 
     # Remove all default public bootstrap peers (private network)
@@ -43,14 +44,40 @@ for i in $(seq 1 60); do
 done
 
 # Connect to bootstrap node for peer discovery
-if [ -n "$IPFS_BOOTSTRAP" ]; then
-    echo "Connecting to bootstrap node: $IPFS_BOOTSTRAP"
-    ipfs bootstrap add "$IPFS_BOOTSTRAP" || true
-    ipfs swarm connect "$IPFS_BOOTSTRAP" || true
-    echo "Bootstrap peer added"
+# IPFS_BOOTSTRAP_HOST is the hostname of the bootstrap container (e.g. ipfs-bootstrap)
+if [ -n "$IPFS_BOOTSTRAP_HOST" ]; then
+    echo "Discovering bootstrap node at $IPFS_BOOTSTRAP_HOST..."
+
+    # Wait for bootstrap API to be reachable
+    for i in $(seq 1 30); do
+        if wget -q --spider "http://$IPFS_BOOTSTRAP_HOST:5001/api/v0/id" 2>/dev/null; then
+            break
+        fi
+        echo "Waiting for bootstrap API... ($i/30)"
+        sleep 2
+    done
+
+    # Get bootstrap node's Peer ID from its API
+    BOOTSTRAP_ID=$(wget -qO- "http://$IPFS_BOOTSTRAP_HOST:5001/api/v0/id" 2>/dev/null \
+        | grep -o '"ID":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+    if [ -n "$BOOTSTRAP_ID" ]; then
+        BOOTSTRAP_ADDR="/dns4/$IPFS_BOOTSTRAP_HOST/tcp/4001/p2p/$BOOTSTRAP_ID"
+        echo "Bootstrap Peer ID: $BOOTSTRAP_ID"
+        echo "Bootstrap Address: $BOOTSTRAP_ADDR"
+
+        # Add as bootstrap peer (persistent across restarts)
+        ipfs bootstrap add "$BOOTSTRAP_ADDR" 2>/dev/null || true
+
+        # Connect immediately
+        ipfs swarm connect "$BOOTSTRAP_ADDR" || true
+        echo "Connected to bootstrap node"
+    else
+        echo "WARNING: Could not get bootstrap Peer ID"
+    fi
 fi
 
-# Also connect to specific swarm peers if provided (legacy)
+# Also connect to specific swarm peers if provided (legacy support)
 if [ -n "$IPFS_SWARM_CONNECT" ]; then
     for peer in $(echo "$IPFS_SWARM_CONNECT" | tr ',' '\n'); do
         echo "Connecting to peer: $peer"
@@ -59,7 +86,7 @@ if [ -n "$IPFS_SWARM_CONNECT" ]; then
 fi
 
 # Wait a bit for DHT routing to stabilize
-sleep 2
+sleep 3
 
 echo "=== Storage Node Ready ==="
 wait $DAEMON_PID
