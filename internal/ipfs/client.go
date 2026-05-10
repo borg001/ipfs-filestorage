@@ -112,6 +112,24 @@ func (c *Client) Cat(ctx context.Context, cidStr string) (io.ReadCloser, error) 
 	return f, nil
 }
 
+// Fetch подтягивает все блоки CID с других нод через bitswap.
+// Вызывает Cat() и полностью вычитывает reader, чтобы гарантировать
+// передачу всех блоков DAG. После Fetch блоки локальны, и Pin сработает.
+func (c *Client) Fetch(ctx context.Context, cidStr string) error {
+	reader, err := c.Cat(ctx, cidStr)
+	if err != nil {
+		return fmt.Errorf("fetch cat failed for %s: %w", cidStr, err)
+	}
+	defer reader.Close()
+
+	// Вычитываем весь поток, чтобы bitswap гарантированно
+	// подтянул все блоки DAG на эту ноду
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		return fmt.Errorf("fetch drain failed for %s: %w", cidStr, err)
+	}
+	return nil
+}
+
 // Stat возвращает метаданные файла по CID
 func (c *Client) Stat(ctx context.Context, cidStr string) (*StatResult, error) {
 	p, err := parsePath(cidStr)
