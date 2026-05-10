@@ -5,16 +5,16 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http/httptest"
-	"strings"
 	"sync"
-	"testing"
 	"time"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
+	"github.com/borg001/ipfs-filestorage/internal/ipfs"
+	"github.com/borg001/ipfs-filestorage/internal/store"
+	"github.com/borg001/ipfs-filestorage/internal/unpin"
 )
 
-// mockCluster реализует тот же интерфейс что ClusterManager
+// mockCluster реализует тот же интерфейс, что ClusterManager
 type mockCluster struct {
 	mu       sync.Mutex
 	files    map[string][]byte // CID -> content
@@ -30,41 +30,47 @@ func newMockCluster() *mockCluster {
 	}
 }
 
-func (m *mockCluster) ClusterAdd(ctx context.Context, filename string, r io.Reader) (string, int64, error) {
+func (m *mockCluster) ClusterAdd(ctx context.Context, filename string, r io.Reader) (*ipfs.AddResult, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
 	cid := fmt.Sprintf("Qm%s", hash(data))
 	m.mu.Lock()
 	m.files[cid] = data
 	m.mu.Unlock()
-	return cid, int64(len(data)), nil
+	return &ipfs.AddResult{CID: cid, Name: filename}, nil
 }
 
-func (m *mockCluster) ClusterPinAll(ctx context.Context, cid string, retries int, delay time.Duration) (bool, error) {
+func (m *mockCluster) ClusterReplicate(ctx context.Context, cid string, retries int, delay time.Duration) error {
 	m.mu.Lock()
 	m.pinned[cid] = true
 	m.mu.Unlock()
-	return true, nil
+	return nil
 }
 
-func (m *mockCluster) ClusterPinAllExcept(ctx context.Context, cid string, skipURL string, retries int, delay time.Duration) (bool, error) {
-	return m.ClusterPinAll(ctx, cid, retries, delay)
+func (m *mockCluster) ClusterPinAllExcept(ctx context.Context, cid string, skipURL string, retries int, delay time.Duration) error {
+	return m.ClusterReplicate(ctx, cid, retries, delay)
 }
 
-func (m *mockCluster) ClusterCat(ctx context.Context, cid string) (io.ReadCloser, int64, error) {
+func (m *mockCluster) ClusterCat(ctx context.Context, cid string) (io.ReadCloser, error) {
 	m.mu.Lock()
 	data, ok := m.files[cid]
 	m.mu.Unlock()
 	if !ok {
-		return nil, 0, fmt.Errorf("file not found")
+		return nil, fmt.Errorf("file not found")
 	}
-	return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func (m *mockCluster) ClusterStat(ctx context.Context, cid string) (*ipfs.StatResult, error) {
-	return nil, fmt.Errorf("not implemented in mock")
+	m.mu.Lock()
+	data, ok := m.files[cid]
+	m.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	return &ipfs.StatResult{CID: cid, Size: uint64(len(data))}, nil
 }
 
 func (m *mockCluster) ClusterUnpinAll(ctx context.Context, cid string) error {
@@ -81,8 +87,12 @@ func (m *mockCluster) ClusterIsPinnedAll(ctx context.Context, cid string) (bool,
 	return ok, nil
 }
 
-func (m *mockCluster) ClusterTryFetch(ctx context.Context, cid string) (io.ReadCloser, int64, string, error) {
+func (m *mockCluster) ClusterTryFetch(ctx context.Context, cid string) (io.ReadCloser, error) {
 	return m.ClusterCat(ctx, cid)
+}
+
+func (m *mockCluster) NodeURLs() []string {
+	return []string{"http://mock1:5001", "http://mock2:5001"}
 }
 
 // Простой hash для mock CID
@@ -98,6 +108,12 @@ func hash(data []byte) string {
 
 // Создаёт тестовый handler с mock cluster
 func setupTestHandler(cfg *config.Config, cluster *mockCluster) *Handler {
-	h := &Handler{cfg: cfg, cluster: cluster}
+	unpinStore, _ := store.NewUnpinStore("/tmp/test-unpin-store.json")
+	h := &Handler{
+		cfg:        cfg,
+		cluster:    cluster,
+		unpinStore: unpinStore,
+	}
+	_ = unpin.NewWorker(cluster, unpinStore, 0, 0) // dummy worker, not started
 	return h
 }
