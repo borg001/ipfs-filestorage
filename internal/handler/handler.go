@@ -1,13 +1,10 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"mime"
 	"mime/multipart"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,11 +92,12 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Загрузка на первую ноду
 	ctx := r.Context()
-	cid, _, err := h.cluster.ClusterAdd(ctx, header.Filename, file)
+	result, err := h.cluster.ClusterAdd(ctx, header.Filename, file)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Upload failed"})
 		return
 	}
+	cid := result.CID
 
 	// Репликация на все ноды кластера (Fetch + Pin)
 	retryDelay := time.Duration(h.cfg.Pinning.RetryDelayMs) * time.Millisecond
@@ -174,7 +172,7 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			}
 			defer f.Close()
 
-			cid, _, err := h.cluster.ClusterAdd(ctx, fileHeader.Filename, f)
+			result, err := h.cluster.ClusterAdd(ctx, fileHeader.Filename, f)
 			if err != nil {
 				mu.Lock()
 				errorsList = append(errorsList, fmt.Sprintf("%s: upload failed", fileHeader.Filename))
@@ -183,11 +181,11 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Репликация на все ноды кластера (Fetch + Pin)
-			_ = h.cluster.ClusterReplicate(ctx, cid, h.cfg.Pinning.Retries, retryDelay)
+			_ = h.cluster.ClusterReplicate(ctx, result.CID, h.cfg.Pinning.Retries, retryDelay)
 
 			mu.Lock()
 			results[idx] = Response{
-				CID:    cid,
+				CID:    result.CID,
 				Name:   fileHeader.Filename,
 				Size:   fileHeader.Size,
 				Pinned: true,
