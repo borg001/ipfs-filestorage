@@ -1,6 +1,7 @@
 version: "3.9"
 
 services:
+  # Bootstrap node — lightweight peer discovery only, no user data
   ipfs-bootstrap:
     image: ipfs/kubo:latest
     container_name: ipfs-bootstrap
@@ -22,6 +23,7 @@ services:
       retries: 10
       start_period: 30s
 
+  # Storage IPFS node 1
   ipfs1:
     image: ipfs/kubo:latest
     container_name: ipfs1
@@ -33,7 +35,7 @@ services:
       - IPFS_PATH=/data/ipfs
       - IPFS_PROFILE=lowpower
       - IPFS_SWARM_KEY=/key/swarm.key
-      - IPFS_BOOTSTRAP=/dns4/ipfs-bootstrap/tcp/4001/p2p/12D3KooWBootstrapPeerPlaceholder
+      - IPFS_BOOTSTRAP_HOST=ipfs-bootstrap
     entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh"]
     networks:
       - storage-net
@@ -47,6 +49,7 @@ services:
       retries: 5
       start_period: 30s
 
+  # Storage IPFS node 2
   ipfs2:
     image: ipfs/kubo:latest
     container_name: ipfs2
@@ -58,7 +61,7 @@ services:
       - IPFS_PATH=/data/ipfs
       - IPFS_PROFILE=lowpower
       - IPFS_SWARM_KEY=/key/swarm.key
-      - IPFS_BOOTSTRAP=/dns4/ipfs-bootstrap/tcp/4001/p2p/12D3KooWBootstrapPeerPlaceholder
+      - IPFS_BOOTSTRAP_HOST=ipfs-bootstrap
     entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh"]
     networks:
       - storage-net
@@ -72,6 +75,7 @@ services:
       retries: 5
       start_period: 30s
 
+  # Storage API service 1
   storage1:
     build:
       context: .
@@ -93,6 +97,7 @@ services:
       ipfs2:
         condition: service_healthy
 
+  # Storage API service 2
   storage2:
     build:
       context: .
@@ -114,6 +119,7 @@ services:
       ipfs2:
         condition: service_healthy
 
+  # Nginx load balancer
   nginx:
     image: nginx:alpine
     container_name: nginx
