@@ -1,6 +1,27 @@
 version: "3.9"
 
 services:
+  ipfs-bootstrap:
+    image: ipfs/kubo:latest
+    container_name: ipfs-bootstrap
+    volumes:
+      - ipfs-bootstrap-data:/data/ipfs
+      - ./swarm.key:/key/swarm.key:ro
+      - ./scripts/ipfs-bootstrap-init.sh:/usr/local/bin/ipfs-bootstrap-init.sh:ro
+    environment:
+      - IPFS_PATH=/data/ipfs
+      - IPFS_SWARM_KEY=/key/swarm.key
+    entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-bootstrap-init.sh"]
+    networks:
+      storage-net:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/api/v0/id"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   ipfs1:
     image: ipfs/kubo:latest
     container_name: ipfs1
@@ -12,10 +33,13 @@ services:
       - IPFS_PATH=/data/ipfs
       - IPFS_PROFILE=lowpower
       - IPFS_SWARM_KEY=/key/swarm.key
-      - IPFS_SWARM_CONNECT=/dns4/ipfs2/tcp/4001/p2p/12D3KooWPeer2
+      - IPFS_BOOTSTRAP=/dns4/ipfs-bootstrap/tcp/4001/p2p/12D3KooWBootstrapPeerPlaceholder
     entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh"]
     networks:
       - storage-net
+    depends_on:
+      ipfs-bootstrap:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/api/v0/id"]
       interval: 10s
@@ -34,10 +58,13 @@ services:
       - IPFS_PATH=/data/ipfs
       - IPFS_PROFILE=lowpower
       - IPFS_SWARM_KEY=/key/swarm.key
-      - IPFS_SWARM_CONNECT=/dns4/ipfs1/tcp/4001/p2p/12D3KooWPeer1
+      - IPFS_BOOTSTRAP=/dns4/ipfs-bootstrap/tcp/4001/p2p/12D3KooWBootstrapPeerPlaceholder
     entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-init.sh"]
     networks:
       - storage-net
+    depends_on:
+      ipfs-bootstrap:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/api/v0/id"]
       interval: 10s
@@ -101,6 +128,7 @@ services:
       - storage2
 
 volumes:
+  ipfs-bootstrap-data:
   ipfs1-data:
   ipfs2-data:
   unpin-data:

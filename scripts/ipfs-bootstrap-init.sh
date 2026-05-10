@@ -1,12 +1,14 @@
 #!/bin/sh
 set -e
 
-# IPFS storage node init — connects to bootstrap for peer discovery
-echo "=== IPFS Storage Node Init ==="
+# Bootstrap node init — lightweight peer discovery node
+# No user data, only DHT routing and peer discovery
+
+echo "=== IPFS Bootstrap Node Init ==="
 
 # Initialize IPFS repo if not exists
 if [ ! -f "$IPFS_PATH/config" ]; then
-    ipfs init --profile=$IPFS_PROFILE
+    ipfs init --profile=server
 
     # Configure API to listen on all interfaces
     ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
@@ -15,7 +17,7 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     # Configure swarm to listen on all interfaces
     ipfs config Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001"]'
 
-    # Full DHT — storage nodes MUST provide content, not just query
+    # Full DHT — bootstrap node must be a DHT server to provide routing
     ipfs config Routing.Type dht
 
     # Remove all default public bootstrap peers (private network)
@@ -30,7 +32,8 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     fi
 fi
 
-# Start IPFS daemon in background
+# Start IPFS daemon
+echo "Starting bootstrap daemon..."
 ipfs daemon --migrate=true &
 DAEMON_PID=$!
 
@@ -42,24 +45,10 @@ for i in $(seq 1 60); do
     sleep 1
 done
 
-# Connect to bootstrap node for peer discovery
-if [ -n "$IPFS_BOOTSTRAP" ]; then
-    echo "Connecting to bootstrap node: $IPFS_BOOTSTRAP"
-    ipfs bootstrap add "$IPFS_BOOTSTRAP" || true
-    ipfs swarm connect "$IPFS_BOOTSTRAP" || true
-    echo "Bootstrap peer added"
-fi
+# Print Peer ID for reference
+PEER_ID=$(wget -qO- http://localhost:5001/api/v0/id 2>/dev/null | grep -o '"ID":"[^"]*"' | head -1 | cut -d'"' -f4)
+echo "=== Bootstrap Node Ready ==="
+echo "Peer ID: $PEER_ID"
+echo "Address: /dns4/ipfs-bootstrap/tcp/4001/p2p/$PEER_ID"
 
-# Also connect to specific swarm peers if provided (legacy)
-if [ -n "$IPFS_SWARM_CONNECT" ]; then
-    for peer in $(echo "$IPFS_SWARM_CONNECT" | tr ',' '\n'); do
-        echo "Connecting to peer: $peer"
-        ipfs swarm connect "$peer" || true
-    done
-fi
-
-# Wait a bit for DHT routing to stabilize
-sleep 2
-
-echo "=== Storage Node Ready ==="
 wait $DAEMON_PID
