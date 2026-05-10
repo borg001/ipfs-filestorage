@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 )
 
 func getTestURLs() []string {
@@ -15,7 +16,7 @@ func getTestURLs() []string {
 	return []string{url, url}
 }
 
-func TestCluster_Add_PinAll_Cat_Unpin(t *testing.T) {
+func TestCluster_Add_Replicate_Cat_Unpin(t *testing.T) {
 	urls := getTestURLs()
 	cm := NewCluster(urls)
 	ctx := context.Background()
@@ -25,17 +26,21 @@ func TestCluster_Add_PinAll_Cat_Unpin(t *testing.T) {
 		t.Skip("IPFS node not available:", err)
 	}
 	t.Logf("ClusterAdd CID: %s", result.CID)
+
+	// Replicate (Fetch + Pin) instead of PinAll
+	t.Log("Running ClusterReplicate...")
+	if err := cm.ClusterReplicate(ctx, result.CID, 3, 100*time.Millisecond); err != nil {
+		t.Fatalf("ClusterReplicate failed: %v", err)
+	}
+	t.Log("ClusterReplicate done")
+
 	r, err := cm.ClusterTryFetch(ctx, result.CID)
 	if err != nil {
 		t.Fatalf("ClusterTryFetch failed: %v", err)
 	}
-	t.Log("ClusterTryFetch ok")
 	r.Close()
-	t.Log("Running ClusterPinAll...")
-	if err := cm.ClusterPinAll(ctx, result.CID, 3, 100); err != nil {
-		t.Fatalf("ClusterPinAll failed: %v", err)
-	}
-	t.Log("ClusterPinAll done")
+	t.Log("ClusterTryFetch ok")
+
 	info, err := cm.ClusterStat(ctx, result.CID)
 	if err != nil {
 		t.Fatalf("ClusterStat failed: %v", err)
@@ -44,6 +49,7 @@ func TestCluster_Add_PinAll_Cat_Unpin(t *testing.T) {
 		t.Fatalf("Stat mismatch: %#v", info)
 	}
 	t.Logf("Stat: CID=%s Size=%d", info.CID, info.Size)
+
 	_ = cm.ClusterUnpinAll(ctx, result.CID)
 }
 
@@ -58,7 +64,7 @@ func TestCluster_PinAllExcept(t *testing.T) {
 	}
 	firstURL := urls[0]
 	t.Log("Running ClusterPinAllExcept skipping first node...")
-	if err := cm.ClusterPinAllExcept(ctx, result.CID, firstURL, 3, 100); err != nil {
+	if err := cm.ClusterPinAllExcept(ctx, result.CID, firstURL, 3, 100*time.Millisecond); err != nil {
 		t.Fatalf("ClusterPinAllExcept failed: %v", err)
 	}
 	t.Log("ClusterPinAllExcept done")
