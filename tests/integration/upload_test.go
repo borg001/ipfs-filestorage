@@ -12,11 +12,6 @@ import (
 	"time"
 )
 
-const (
-	apiKey   = "SECRET_KEY_1"
-	nginxURL = "http://localhost:8080" // nginx proxy (round-robin)
-)
-
 // TestUploadAndDownload verifies basic upload → download → delete cycle.
 func TestUploadAndDownload(t *testing.T) {
 	if os.Getenv("INTEGRATION") == "" {
