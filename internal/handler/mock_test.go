@@ -107,7 +107,7 @@ func mockHash(data []byte) string {
 }
 
 // Создаёт тестовый handler с mock cluster
-func setupTestHandler(cfg *config.Config, cluster *mockCluster) *Handler {
+func setupTestHandler(cfg *config.Config, cluster ipfs.Clusterer) *Handler {
 	unpinStore, _ := store.NewUnpinStore("/tmp/test-unpin-store.json")
 	h := &Handler{
 		cfg:        cfg,
