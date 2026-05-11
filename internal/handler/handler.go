@@ -2,9 +2,9 @@ package handler
 
 import (
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
