@@ -14,7 +14,7 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
     ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
 
-    # Configure swarm addresses (MUST use --json for array values)
+    # Configure swarm addresses — MUST use --json for array values in modern kubo
     ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001"]'
 
     # Full DHT — bootstrap node must be a DHT server to provide routing
