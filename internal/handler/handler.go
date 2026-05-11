@@ -1,13 +1,10 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -99,17 +96,16 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Upload failed"})
 		return
 	}
-	cid := result.CID
 
 	// Репликация на все ноды кластера (Fetch + Pin)
 	retryDelay := time.Duration(h.cfg.Pinning.RetryDelayMs) * time.Millisecond
-	if err := h.cluster.ClusterReplicate(ctx, cid, h.cfg.Pinning.Retries, retryDelay); err != nil {
+	if err := h.cluster.ClusterReplicate(ctx, result.CID, h.cfg.Pinning.Retries, retryDelay); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Replication failed"})
 		return
 	}
 
 	resp := Response{
-		CID:    cid,
+		CID:    result.CID,
 		Name:   header.Filename,
 		Size:   header.Size,
 		Pinned: true,
@@ -235,11 +231,6 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	// Определяем Content-Length через Stat
-	stat, err := h.cluster.ClusterStat(ctx, cid)
-	if err == nil && stat.Size > 0 {
-		w.Header().Set("Content-Length", strconv.FormatUint(stat.Size, 10))
-	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
@@ -267,40 +258,4 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		"status": "deleted",
 		"cid":    cid,
 	})
-}
-
-// validateFile проверяет расширение и MIME-тип
-func validateFile(filename string, contentType string, cfg *config.Config) error {
-	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
-	ext = strings.ToLower(ext)
-	allowedExt := false
-	for _, e := range cfg.Upload.AllowedExtensions {
-		if e == ext {
-			allowedExt = true
-			break
-		}
-	}
-	if !allowedExt {
-		return fmt.Errorf("Invalid file type")
-	}
-	if contentType == "" || contentType == "application/octet-stream" {
-		contentType = mime.TypeByExtension(filepath.Ext(filename))
-	}
-	if _, ok := cfg.Upload.AllowedMimeTypes[contentType]; !ok {
-		ct := mime.TypeByExtension("." + ext)
-		if ct != "" {
-			if _, ok := cfg.Upload.AllowedMimeTypes[ct]; ok {
-				return nil
-			}
-		}
-		return fmt.Errorf("Invalid MIME type: %s", contentType)
-	}
-	return nil
-}
-
-// writeJSON пишет JSON-ответ
-func writeJSON(w http.ResponseWriter, code int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
 }
