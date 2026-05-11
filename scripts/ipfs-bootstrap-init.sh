@@ -20,6 +20,9 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     # Full DHT — bootstrap node must be a DHT server to provide routing
     ipfs config Routing.Type dht
 
+    # Disable AutoConf — incompatible with private networks (Kubo 0.41+)
+    ipfs config --json AutoConf.Enabled false
+
     # Remove all default public bootstrap peers (private network)
     ipfs bootstrap rm --all
 
