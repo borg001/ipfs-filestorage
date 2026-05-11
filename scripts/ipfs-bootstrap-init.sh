@@ -21,6 +21,7 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     ipfs config Routing.Type dht
 
     # Disable AutoConf — incompatible with private networks (Kubo 0.41+)
+    # MUST be set BEFORE daemon starts
     ipfs config --json AutoConf.Enabled false
 
     # Remove all default public bootstrap peers (private network)
@@ -34,6 +35,9 @@ if [ ! -f "$IPFS_PATH/config" ]; then
         cp "$IPFS_SWARM_KEY" "$IPFS_PATH/swarm.key"
     fi
 fi
+
+# Ensure AutoConf is disabled even if repo was pre-initialized
+ipfs config --json AutoConf.Enabled false
 
 # Start IPFS daemon
 echo "Starting bootstrap daemon..."
