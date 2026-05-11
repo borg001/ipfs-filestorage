@@ -14,7 +14,7 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/unpin"
 )
 
-// mockCluster реализует тот же интерфейс, что ClusterManager
+// mockCluster реализует ipfs.Clusterer для unit-тестов
 type mockCluster struct {
 	mu       sync.Mutex
 	files    map[string][]byte // CID -> content
@@ -35,7 +35,7 @@ func (m *mockCluster) ClusterAdd(ctx context.Context, filename string, r io.Read
 	if err != nil {
 		return nil, err
 	}
-	cid := fmt.Sprintf("Qm%s", hash(data))
+	cid := fmt.Sprintf("Qm%s", mockHash(data))
 	m.mu.Lock()
 	m.files[cid] = data
 	m.mu.Unlock()
@@ -99,7 +99,7 @@ func (m *mockCluster) NodeURLs() []string {
 var hashCounter int
 var hashMu sync.Mutex
 
-func hash(data []byte) string {
+func mockHash(data []byte) string {
 	hashMu.Lock()
 	defer hashMu.Unlock()
 	hashCounter++
