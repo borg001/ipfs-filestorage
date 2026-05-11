@@ -22,7 +22,7 @@ type mockCluster struct {
 	nodeAddr map[string]string // CID -> node URL
 }
 
-func newMockCluster() *mockCluster {
+func newMockCluster() ipfs.Clusterer {
 	return &mockCluster{
 		files:    make(map[string][]byte),
 		pinned:   make(map[string]bool),
@@ -103,7 +103,8 @@ func mockHash(data []byte) string {
 }
 
 // Создаёт тестовый handler с mock cluster
-func setupTestHandler(cfg *config.Config, cluster ipfs.Clusterer) *Handler {
+func setupTestHandler(cfg *config.Config) *Handler {
+	cluster := newMockCluster()
 	unpinStore, _ := store.NewUnpinStore("/tmp/test-unpin-store.json")
 	h := &Handler{
 		cfg:        cfg,
