@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +29,7 @@ type Response struct {
 // Handler содержит HTTP-хендлеры сервиса.
 type Handler struct {
 	cfg         *config.Config
-	cluster     *ipfs.ClusterManager
+	cluster     ipfs.Clusterer
 	unpinStore  *store.UnpinStore
 	unpinWorker *unpin.Worker
 }
@@ -265,4 +267,38 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		"status": "deleted",
 		"cid":    cid,
 	})
+}
+
+func validateFile(filename string, contentType string, cfg *config.Config) error {
+	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
+	ext = strings.ToLower(ext)
+	allowedExt := false
+	for _, e := range cfg.Upload.AllowedExtensions {
+		if e == ext {
+			allowedExt = true
+			break
+		}
+	}
+	if !allowedExt {
+		return fmt.Errorf("Invalid file type")
+	}
+	if contentType == "" || contentType == "application/octet-stream" {
+		contentType = mime.TypeByExtension(filepath.Ext(filename))
+	}
+	if _, ok := cfg.Upload.AllowedMimeTypes[contentType]; !ok {
+		ct := mime.TypeByExtension("." + ext)
+		if ct != "" {
+			if _, ok := cfg.Upload.AllowedMimeTypes[ct]; ok {
+				return nil
+			}
+		}
+		return fmt.Errorf("Invalid MIME type: %s", contentType)
+	}
+	return nil
+}
+
+func writeJSON(w http.ResponseWriter, code int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
 }
