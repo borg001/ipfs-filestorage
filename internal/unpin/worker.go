@@ -11,7 +11,7 @@ import (
 
 // Worker фоновый сборщик мусора для unpin-списка
 type Worker struct {
-	cluster  *ipfs.ClusterManager
+	cluster  ipfs.Clusterer
 	store    *store.UnpinStore
 	ttl      time.Duration
 	interval time.Duration
@@ -20,7 +20,7 @@ type Worker struct {
 }
 
 // NewWorker создаёт новый worker
-func NewWorker(cluster *ipfs.ClusterManager, store *store.UnpinStore, ttl time.Duration, interval time.Duration) *Worker {
+func NewWorker(cluster ipfs.Clusterer, store *store.UnpinStore, ttl time.Duration, interval time.Duration) *Worker {
 	return &Worker{
 		cluster:  cluster,
 		store:    store,
