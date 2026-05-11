@@ -12,8 +12,8 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
     ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
 
-    # Configure swarm to listen on all interfaces
-    ipfs config Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001"]'
+    # Configure swarm to listen on all interfaces — MUST use --json for array values
+    ipfs config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001"]'
 
     # Full DHT — storage nodes MUST provide content, not just query
     # dhtclient only queries — files added on this node won't be announced!
