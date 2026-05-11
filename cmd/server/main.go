@@ -14,7 +14,7 @@ import (
 func main() {
 	fmt.Println("ipfs-filestorage starting...")
 
-	cfg := config.NewConfig()
+	cfg := config.Load()
 	handlers := handler.NewHandler(cfg)
 
 	mux := http.NewServeMux()
@@ -33,13 +33,14 @@ func main() {
 
 	wrapped := middleware.Chain(
 		mux,
-		middleware.RecoverMiddleware,
-		middleware.CORSMiddleware("*"),
+		middleware.PanicRecovery(),
+		middleware.APIKeyAuth(cfg.API.Keys),
+		middleware.CORS(cfg.CORS.AllowedOrigins, cfg.CORS.AllowedHeaders),
 	)
 
-	port := os.Getenv("PORT")
+	port := os.Getenv("SERVER_PORT")
 	if port == "" {
-		port = "3000"
+		port = cfg.Server.Port
 	}
 
 	log.Printf("Server listening on :%s", port)

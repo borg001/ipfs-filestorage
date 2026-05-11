@@ -1,15 +1,10 @@
 package handler
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"mime"
+	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,19 +26,19 @@ type Response struct {
 // Handler содержит HTTP-хендлеры сервиса.
 type Handler struct {
 	cfg         *config.Config
-	cluster     *ipfs.ClusterManager
+	cluster     ipfs.Clusterer
 	unpinStore  *store.UnpinStore
 	unpinWorker *unpin.Worker
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
 func NewHandler(cfg *config.Config) *Handler {
-	cluster := ipfs.NewCluster(cfg.ClusterNodes)
+	cluster := ipfs.NewCluster(cfg.IPFS.ClusterNodes)
 	if cluster == nil {
-		cluster = ipfs.NewCluster([]string{cfg.IPFSURL})
+		cluster = ipfs.NewCluster([]string{cfg.IPFS.LocalURL})
 	}
 
-	unpinStore, err := store.NewUnpinStore(cfg.UnpinStorePath)
+	unpinStore, err := store.NewUnpinStore(cfg.Unpin.StorePath)
 	if err != nil {
 		unpinStore, _ = store.NewUnpinStore("/tmp/unpin-store.json")
 	}
@@ -55,8 +50,8 @@ func NewHandler(cfg *config.Config) *Handler {
 	}
 
 	// Запускаем TTL worker
-	if cfg.UnpinTTL > 0 {
-		h.unpinWorker = unpin.NewWorker(cluster, unpinStore, cfg.UnpinTTL, cfg.UnpinGCInterval)
+	if cfg.Unpin.TTL > 0 {
+		h.unpinWorker = unpin.NewWorker(cluster, unpinStore, cfg.Unpin.TTL, cfg.Unpin.GCInterval)
 		h.unpinWorker.Start()
 	}
 
@@ -77,40 +72,40 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	// Валидация размера
-	if header.Size > h.cfg.UploadMaxFileSize {
+	if header.Size > h.cfg.Upload.MaxFileSize {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
 			"error":   "File too large",
-			"maxSize": h.cfg.UploadMaxFileSize,
+			"maxSize": h.cfg.Upload.MaxFileSize,
 		})
 		return
 	}
 
 	// Валидация типа
-	if err := h.validateFile(header.Filename, header.Header.Get("Content-Type")); err != nil {
+	if err := validateFile(header.Filename, header.Header.Get("Content-Type"), h.cfg); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"error":        err.Error(),
-			"allowedTypes": h.cfg.AllowedExtensions,
+			"allowedTypes": h.cfg.Upload.AllowedExtensions,
 		})
 		return
 	}
 
-	// Загрузка и репликация
+	// Загрузка на первую ноду
 	ctx := r.Context()
-	cid, _, err := h.cluster.ClusterAdd(ctx, header.Filename, file)
+	result, err := h.cluster.ClusterAdd(ctx, header.Filename, file)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Upload failed"})
 		return
 	}
 
-	retryDelay := time.Duration(h.cfg.PinningRetryDelay) * time.Millisecond
-	_, err = h.cluster.ClusterPinAll(ctx, cid, h.cfg.PinningRetries, retryDelay)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Pinning failed"})
+	// Репликация на все ноды кластера (Fetch + Pin)
+	retryDelay := time.Duration(h.cfg.Pinning.RetryDelayMs) * time.Millisecond
+	if err := h.cluster.ClusterReplicate(ctx, result.CID, h.cfg.Pinning.Retries, retryDelay); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Replication failed"})
 		return
 	}
 
 	resp := Response{
-		CID:    cid,
+		CID:    result.CID,
 		Name:   header.Filename,
 		Size:   header.Size,
 		Pinned: true,
@@ -133,21 +128,21 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	// Валидация
 	invalid := make([]string, 0)
 	for _, fh := range files {
-		if fh.Size > h.cfg.UploadMaxFileSize {
+		if fh.Size > h.cfg.Upload.MaxFileSize {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
 				"error":   "File too large",
-				"maxSize": h.cfg.UploadMaxFileSize,
+				"maxSize": h.cfg.Upload.MaxFileSize,
 			})
 			return
 		}
-		if err := h.validateFile(fh.Filename, fh.Header.Get("Content-Type")); err != nil {
+		if err := validateFile(fh.Filename, fh.Header.Get("Content-Type"), h.cfg); err != nil {
 			invalid = append(invalid, fh.Filename)
 		}
 	}
 	if len(invalid) > 0 {
 		resp := map[string]interface{}{
 			"error":        "Invalid file types",
-			"allowedTypes": h.cfg.AllowedExtensions,
+			"allowedTypes": h.cfg.Upload.AllowedExtensions,
 			"invalidFiles": invalid,
 		}
 		writeJSON(w, http.StatusBadRequest, resp)
@@ -160,7 +155,7 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	errorsList := make([]string, 0)
-	retryDelay := time.Duration(h.cfg.PinningRetryDelay) * time.Millisecond
+	retryDelay := time.Duration(h.cfg.Pinning.RetryDelayMs) * time.Millisecond
 
 	for i, fh := range files {
 		wg.Add(1)
@@ -175,7 +170,7 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			}
 			defer f.Close()
 
-			cid, _, err := h.cluster.ClusterAdd(ctx, fileHeader.Filename, f)
+			result, err := h.cluster.ClusterAdd(ctx, fileHeader.Filename, f)
 			if err != nil {
 				mu.Lock()
 				errorsList = append(errorsList, fmt.Sprintf("%s: upload failed", fileHeader.Filename))
@@ -183,11 +178,12 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			_, _ = h.cluster.ClusterPinAll(ctx, cid, h.cfg.PinningRetries, retryDelay)
+			// Репликация на все ноды кластера (Fetch + Pin)
+			_ = h.cluster.ClusterReplicate(ctx, result.CID, h.cfg.Pinning.Retries, retryDelay)
 
 			mu.Lock()
 			results[idx] = Response{
-				CID:    cid,
+				CID:    result.CID,
 				Name:   fileHeader.Filename,
 				Size:   fileHeader.Size,
 				Pinned: true,
@@ -228,21 +224,17 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Пытаемся получить данные из кластера
-	data, err := h.cluster.ClusterTryFetch(ctx, cid)
+	reader, err := h.cluster.ClusterTryFetch(ctx, cid)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}
+	defer reader.Close()
 
-	// Определяем Content-Type
-	stat, err := h.cluster.ClusterStat(ctx, cid)
-	if err == nil && stat.CumulativeSize > 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(stat.CumulativeSize, 10))
-	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	io.Copy(w, reader)
 }
 
 // HandleDelete обрабатывает DELETE /file/{cid}.
@@ -256,47 +248,14 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	// Добавляем в unpin-список (soft-delete)
 	h.unpinStore.Add(cid)
 
+	// Асинхронный unpin на всех нодах
 	ctx := r.Context()
 	go func() {
-		h.cluster.ClusterUnpinAll(ctx, cid, 3, 500*time.Millisecond)
+		h.cluster.ClusterUnpinAll(ctx, cid)
 	}()
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "deleted",
 		"cid":    cid,
 	})
-}
-
-func (h *Handler) validateFile(filename string, contentType string) error {
-	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
-	ext = strings.ToLower(ext)
-	allowedExt := false
-	for _, e := range h.cfg.AllowedExtensions {
-		if e == ext {
-			allowedExt = true
-			break
-		}
-	}
-	if !allowedExt {
-		return fmt.Errorf("Invalid file type")
-	}
-	if contentType == "" || contentType == "application/octet-stream" {
-		contentType = mime.TypeByExtension(filepath.Ext(filename))
-	}
-	if _, ok := h.cfg.AllowedMimeTypes[contentType]; !ok {
-		ct := mime.TypeByExtension("." + ext)
-		if ct != "" {
-			if _, ok := h.cfg.AllowedMimeTypes[ct]; ok {
-				return nil
-			}
-		}
-		return fmt.Errorf("Invalid MIME type: %s", contentType)
-	}
-	return nil
-}
-
-func writeJSON(w http.ResponseWriter, code int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
 }
