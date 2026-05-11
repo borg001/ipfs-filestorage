@@ -34,6 +34,9 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     fi
 fi
 
+# Ensure AutoConf is disabled even if repo was pre-initialized
+ipfs config --json AutoConf.Enabled false
+
 # Start IPFS daemon in background
 ipfs daemon --migrate=true &
 DAEMON_PID=$!
