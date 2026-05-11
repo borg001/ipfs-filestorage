@@ -269,6 +269,7 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// validateFile проверяет расширение и MIME-тип
 func validateFile(filename string, contentType string, cfg *config.Config) error {
 	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
 	ext = strings.ToLower(ext)
@@ -297,6 +298,7 @@ func validateFile(filename string, contentType string, cfg *config.Config) error
 	return nil
 }
 
+// writeJSON пишет JSON-ответ
 func writeJSON(w http.ResponseWriter, code int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
