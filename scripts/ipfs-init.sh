@@ -19,6 +19,9 @@ if [ ! -f "$IPFS_PATH/config" ]; then
     # dhtclient only queries — files added on this node won't be announced!
     ipfs config Routing.Type dht
 
+    # Disable AutoConf — incompatible with private networks (Kubo 0.41+)
+    ipfs config --json AutoConf.Enabled false
+
     # Remove all default public bootstrap peers (private network)
     ipfs bootstrap rm --all
 
