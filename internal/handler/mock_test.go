@@ -11,7 +11,6 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 	"github.com/borg001/ipfs-filestorage/internal/store"
-	"github.com/borg001/ipfs-filestorage/internal/unpin"
 )
 
 // mockCluster реализует ipfs.Clusterer для unit-тестов
