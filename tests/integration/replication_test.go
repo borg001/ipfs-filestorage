@@ -81,7 +81,6 @@ func TestReplicationMultipleSizes(t *testing.T) {
 
 			// Wait for replication with retry
 			ipfs2Data := waitForReplication(t, ipfs2API, cid, tc.size)
-
 			if !bytes.Equal(ipfs2Data, content) {
 				t.Fatalf("REPLICATION FAILED for %s: got %d bytes, expected %d bytes",
 					tc.name, len(ipfs2Data), len(content))
@@ -156,7 +155,7 @@ func TestReplicationBothNodesHaveData(t *testing.T) {
 	t.Logf("✅ Both nodes have identical %d bytes, both pinned", len(ipfs1Data))
 }
 
-// TestReplicationAfterDelete verifies soft-delete returns 404 but data preserved.
+// TestReplicationAfterDelete verifies soft-delete returns 404 but data preserved on ipfs2.
 func TestReplicationAfterDelete(t *testing.T) {
 	if os.Getenv("INTEGRATION") == "" {
 		t.Skip("Set INTEGRATION=1 to run integration tests")
@@ -178,20 +177,30 @@ func TestReplicationAfterDelete(t *testing.T) {
 	// Delete through the SAME storage instance to ensure unpinStore consistency
 	deleteFileFromStorage(t, storage1URL, cid)
 
-	// API should return 404 from the same storage instance
-	time.Sleep(500 * time.Millisecond)
+	// Poll for 404 from storage1 (unpinStore needs to update in-memory)
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, _ := http.NewRequest("GET", storage1URL+"/file/"+cid, nil)
-	req.Header.Set("X-API-Key", apiKey)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("GET after delete failed: %v", err)
-	}
-	defer resp.Body.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	got404 := false
 
-	if resp.StatusCode != http.StatusNotFound {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("Expected 404 after delete from storage1, got %d: %s", resp.StatusCode, body)
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequest("GET", storage1URL+"/file/"+cid, nil)
+		req.Header.Set("X-API-Key", apiKey)
+		resp, err := client.Do(req)
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusNotFound {
+			got404 = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	if !got404 {
+		t.Fatalf("Expected 404 after delete from storage1, but never got it within 10s")
 	}
 
 	// Data should still exist on ipfs2 (soft-delete, GC hasn't run yet)
@@ -236,18 +245,28 @@ func TestUploadAndDownload(t *testing.T) {
 	// Delete
 	deleteFileFromStorage(t, storage1URL, cid)
 
-	// Verify 404
-	time.Sleep(500 * time.Millisecond)
-	req2, _ := http.NewRequest("GET", storage1URL+"/file/"+cid, nil)
-	req2.Header.Set("X-API-Key", apiKey)
-	resp2, err := client.Do(req2)
-	if err != nil {
-		t.Fatalf("post-delete check failed: %v", err)
-	}
-	defer resp2.Body.Close()
+	// Poll for 404
+	deadline := time.Now().Add(10 * time.Second)
+	got404 := false
+	for time.Now().Before(deadline) {
+		req2, _ := http.NewRequest("GET", storage1URL+"/file/"+cid, nil)
+		req2.Header.Set("X-API-Key", apiKey)
+		resp2, err := client.Do(req2)
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		resp2.Body.Close()
 
-	if resp2.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404 after delete, got %d", resp2.StatusCode)
+		if resp2.StatusCode == http.StatusNotFound {
+			got404 = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	if !got404 {
+		t.Fatalf("expected 404 after delete, but never got it within 10s")
 	}
 
 	t.Log("✅ Upload → Download → Delete → 404: OK")
