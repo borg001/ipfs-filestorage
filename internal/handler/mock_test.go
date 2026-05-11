@@ -106,11 +106,9 @@ func mockHash(data []byte) string {
 func setupTestHandler(cfg *config.Config) *Handler {
 	cluster := newMockCluster()
 	unpinStore, _ := store.NewUnpinStore("/tmp/test-unpin-store.json")
-	h := &Handler{
+	return &Handler{
 		cfg:        cfg,
 		cluster:    cluster,
 		unpinStore: unpinStore,
 	}
-	_ = unpin.NewWorker(cluster, unpinStore, 0, 0) // dummy worker, not started
-	return h
 }
