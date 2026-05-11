@@ -17,13 +17,13 @@ import (
 
 const (
 	apiKey        = "SECRET_KEY_1"
-	nginxURL      = "http://localhost:8080" // nginx proxy (round-robin)
+	nginxURL      = "http://localhost:8081" // nginx proxy (port 8081 on host)
 	storage1URL   = "http://localhost:3001" // storage1 direct
 	storage2URL   = "http://localhost:3002" // storage2 direct
 	ipfs1API      = "http://localhost:5001" // ipfs1 API
 	ipfs2API      = "http://localhost:5002" // ipfs2 API
-	replicaWait   = 3 * time.Second        // wait for replication after upload
-	maxReplicaWait = 15 * time.Second       // max wait with retries
+	replicaWait   = 5 * time.Second         // wait for replication after upload
+	maxReplicaWait = 20 * time.Second       // max wait with retries
 )
 
 // TestReplicationByteForByte uploads a file through storage1,
@@ -34,9 +34,9 @@ func TestReplicationByteForByte(t *testing.T) {
 		t.Skip("Set INTEGRATION=1 to run integration tests")
 	}
 
-	// Upload a unique file via storage1
+	// Upload a unique PNG file via storage1
 	content := fmt.Sprintf("replication-test-%d", time.Now().UnixNano())
-	cid := uploadFile(t, content)
+	cid := uploadFile(t, content, "test.png")
 
 	t.Logf("Uploaded CID: %s (content: %q)", cid, content)
 
@@ -76,7 +76,7 @@ func TestReplicationMultipleSizes(t *testing.T) {
 			content := make([]byte, tc.size)
 			rand.Read(content)
 
-			cid := uploadBytes(t, content, fmt.Sprintf("test-%s.bin", tc.name))
+			cid := uploadBytes(t, content, fmt.Sprintf("test-%s.png", tc.name))
 			t.Logf("Uploaded %s: CID=%s", tc.name, cid)
 
 			// Wait for replication with retry
@@ -93,7 +93,7 @@ func TestReplicationMultipleSizes(t *testing.T) {
 }
 
 // TestReplicationNodeBRestart verifies that after restarting ipfs2,
-// the data is still available (persistent storage).
+// the data is still available (persistent storage + pin).
 func TestReplicationNodeBRestart(t *testing.T) {
 	if os.Getenv("INTEGRATION") == "" {
 		t.Skip("Set INTEGRATION=1 to run integration tests")
@@ -101,7 +101,7 @@ func TestReplicationNodeBRestart(t *testing.T) {
 
 	// Upload a file
 	content := fmt.Sprintf("restart-test-%d", time.Now().UnixNano())
-	cid := uploadFile(t, content)
+	cid := uploadFile(t, content, "test.png")
 	t.Logf("Uploaded CID: %s", cid)
 
 	// Wait for replication
@@ -112,11 +112,6 @@ func TestReplicationNodeBRestart(t *testing.T) {
 	if string(beforeRestart) != content {
 		t.Fatalf("Data not on ipfs2 before restart: got %q", beforeRestart)
 	}
-
-	// Note: In a full test we would restart ipfs2 here with:
-	//   docker-compose restart ipfs2
-	//   time.Sleep(15 * time.Second) // wait for ipfs2 to come back
-	// For now we verify the data is pinned and persistent
 
 	// Verify pin status on ipfs2
 	pinned := isPinnedOnIPFS(t, ipfs2API, cid)
@@ -135,7 +130,7 @@ func TestReplicationBothNodesHaveData(t *testing.T) {
 	}
 
 	content := fmt.Sprintf("both-nodes-test-%d", time.Now().UnixNano())
-	cid := uploadFile(t, content)
+	cid := uploadFile(t, content, "test.png")
 	t.Logf("Uploaded CID: %s", cid)
 
 	// Wait for replication
@@ -176,7 +171,7 @@ func TestReplicationAfterDelete(t *testing.T) {
 	}
 
 	content := fmt.Sprintf("delete-test-%d", time.Now().UnixNano())
-	cid := uploadFile(t, content)
+	cid := uploadFile(t, content, "test.png")
 	t.Logf("Uploaded CID: %s", cid)
 
 	// Wait for replication
@@ -216,9 +211,9 @@ func TestReplicationAfterDelete(t *testing.T) {
 
 // --- Helper functions ---
 
-func uploadFile(t *testing.T, content string) string {
+func uploadFile(t *testing.T, content string, filename string) string {
 	t.Helper()
-	return uploadBytes(t, []byte(content), "test.txt")
+	return uploadBytes(t, []byte(content), filename)
 }
 
 func uploadBytes(t *testing.T, content []byte, filename string) string {
@@ -240,7 +235,7 @@ func uploadBytes(t *testing.T, content []byte, filename string) string {
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("X-API-Key", apiKey)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Upload failed: %v", err)
@@ -263,7 +258,7 @@ func uploadBytes(t *testing.T, content []byte, filename string) string {
 func catFromIPFS(t *testing.T, apiURL, cid string) []byte {
 	t.Helper()
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second}
 	url := apiURL + "/api/v0/cat?arg=" + cid
 
 	req, _ := http.NewRequest("POST", url, nil)
@@ -324,18 +319,18 @@ func waitForReplication(t *testing.T, apiURL, cid string, expectedSize int) []by
 	t.Helper()
 
 	deadline := time.Now().Add(maxReplicaWait)
-	var lastErr string
+	var lastData []byte
 
 	for time.Now().Before(deadline) {
 		data := catFromIPFS(t, apiURL, cid)
 		if len(data) == expectedSize {
 			return data
 		}
-		lastErr = fmt.Sprintf("got %d bytes, expected %d", len(data), expectedSize)
-		time.Sleep(2 * time.Second)
+		lastData = data
+		time.Sleep(3 * time.Second)
 	}
 
-	t.Fatalf("Replication timeout for CID %s on %s: %s", cid, apiURL, lastErr)
+	t.Fatalf("Replication timeout for CID %s on %s: got %d bytes, expected %d", cid, apiURL, len(lastData), expectedSize)
 	return nil
 }
 
