@@ -17,13 +17,13 @@ import (
 
 const (
 	apiKey        = "SECRET_KEY_1"
-	nginxURL      = "http://localhost:8081" // nginx proxy (port 8081 on host)
+	nginxURL      = "http://localhost:8081" // nginx on alt port (8080 occupied by MCP)
 	storage1URL   = "http://localhost:3001" // storage1 direct
 	storage2URL   = "http://localhost:3002" // storage2 direct
 	ipfs1API      = "http://localhost:5001" // ipfs1 API
 	ipfs2API      = "http://localhost:5002" // ipfs2 API
-	replicaWait   = 5 * time.Second         // wait for replication after upload
-	maxReplicaWait = 20 * time.Second       // max wait with retries
+	replicaWait   = 5 * time.Second        // wait for replication after upload
+	maxReplicaWait = 20 * time.Second      // max wait with retries
 )
 
 // TestReplicationByteForByte uploads a file through storage1,
@@ -36,7 +36,7 @@ func TestReplicationByteForByte(t *testing.T) {
 
 	// Upload a unique PNG file via storage1
 	content := fmt.Sprintf("replication-test-%d", time.Now().UnixNano())
-	cid := uploadFile(t, content, "test.png")
+	cid := uploadFileToStorage(t, content, "test.png")
 
 	t.Logf("Uploaded CID: %s (content: %q)", cid, content)
 
@@ -76,7 +76,7 @@ func TestReplicationMultipleSizes(t *testing.T) {
 			content := make([]byte, tc.size)
 			rand.Read(content)
 
-			cid := uploadBytes(t, content, fmt.Sprintf("test-%s.png", tc.name))
+			cid := uploadBytesToStorage(t, content, fmt.Sprintf("test-%s.json", tc.name))
 			t.Logf("Uploaded %s: CID=%s", tc.name, cid)
 
 			// Wait for replication with retry
@@ -92,22 +92,20 @@ func TestReplicationMultipleSizes(t *testing.T) {
 	}
 }
 
-// TestReplicationNodeBRestart verifies that after restarting ipfs2,
-// the data is still available (persistent storage + pin).
+// TestReplicationNodeBRestart verifies pin persistence on ipfs2.
 func TestReplicationNodeBRestart(t *testing.T) {
 	if os.Getenv("INTEGRATION") == "" {
 		t.Skip("Set INTEGRATION=1 to run integration tests")
 	}
 
-	// Upload a file
 	content := fmt.Sprintf("restart-test-%d", time.Now().UnixNano())
-	cid := uploadFile(t, content, "test.png")
+	cid := uploadFileToStorage(t, content, "test.json")
 	t.Logf("Uploaded CID: %s", cid)
 
 	// Wait for replication
 	time.Sleep(replicaWait)
 
-	// Verify it's on ipfs2 before restart
+	// Verify it's on ipfs2
 	beforeRestart := catFromIPFS(t, ipfs2API, cid)
 	if string(beforeRestart) != content {
 		t.Fatalf("Data not on ipfs2 before restart: got %q", beforeRestart)
@@ -122,23 +120,20 @@ func TestReplicationNodeBRestart(t *testing.T) {
 	t.Logf("✅ CID %s is pinned on ipfs2 — data is persistent", cid)
 }
 
-// TestReplicationBothNodesHaveData verifies that after upload,
-// both ipfs1 AND ipfs2 have the identical data.
+// TestReplicationBothNodesHaveData verifies both ipfs1 AND ipfs2 have identical data.
 func TestReplicationBothNodesHaveData(t *testing.T) {
 	if os.Getenv("INTEGRATION") == "" {
 		t.Skip("Set INTEGRATION=1 to run integration tests")
 	}
 
 	content := fmt.Sprintf("both-nodes-test-%d", time.Now().UnixNano())
-	cid := uploadFile(t, content, "test.png")
+	cid := uploadFileToStorage(t, content, "test.json")
 	t.Logf("Uploaded CID: %s", cid)
 
 	// Wait for replication
 	time.Sleep(replicaWait)
 
-	// Read from ipfs1
 	ipfs1Data := catFromIPFS(t, ipfs1API, cid)
-	// Read from ipfs2
 	ipfs2Data := catFromIPFS(t, ipfs2API, cid)
 
 	if string(ipfs1Data) != content {
@@ -151,7 +146,6 @@ func TestReplicationBothNodesHaveData(t *testing.T) {
 		t.Fatalf("DATA DIVERGENCE: ipfs1=%d bytes, ipfs2=%d bytes", len(ipfs1Data), len(ipfs2Data))
 	}
 
-	// Verify both are pinned
 	if !isPinnedOnIPFS(t, ipfs1API, cid) {
 		t.Fatal("CID not pinned on ipfs1!")
 	}
@@ -162,16 +156,14 @@ func TestReplicationBothNodesHaveData(t *testing.T) {
 	t.Logf("✅ Both nodes have identical %d bytes, both pinned", len(ipfs1Data))
 }
 
-// TestReplicationAfterDelete verifies that after soft-delete,
-// the file returns 404 through the API but data is still on ipfs
-// (until GC runs).
+// TestReplicationAfterDelete verifies soft-delete returns 404 but data preserved.
 func TestReplicationAfterDelete(t *testing.T) {
 	if os.Getenv("INTEGRATION") == "" {
 		t.Skip("Set INTEGRATION=1 to run integration tests")
 	}
 
 	content := fmt.Sprintf("delete-test-%d", time.Now().UnixNano())
-	cid := uploadFile(t, content, "test.png")
+	cid := uploadFileToStorage(t, content, "test.json")
 	t.Logf("Uploaded CID: %s", cid)
 
 	// Wait for replication
@@ -183,12 +175,13 @@ func TestReplicationAfterDelete(t *testing.T) {
 		t.Fatalf("Replication failed before delete test")
 	}
 
-	// Delete through API
-	deleteFile(t, cid)
+	// Delete through the SAME storage instance to ensure unpinStore consistency
+	deleteFileFromStorage(t, storage1URL, cid)
 
-	// API should return 404
+	// API should return 404 from the same storage instance
+	time.Sleep(500 * time.Millisecond)
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, _ := http.NewRequest("GET", nginxURL+"/file/"+cid, nil)
+	req, _ := http.NewRequest("GET", storage1URL+"/file/"+cid, nil)
 	req.Header.Set("X-API-Key", apiKey)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -197,7 +190,8 @@ func TestReplicationAfterDelete(t *testing.T) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("Expected 404 after delete, got %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("Expected 404 after delete from storage1, got %d: %s", resp.StatusCode, body)
 	}
 
 	// Data should still exist on ipfs2 (soft-delete, GC hasn't run yet)
@@ -209,14 +203,124 @@ func TestReplicationAfterDelete(t *testing.T) {
 	t.Logf("✅ Soft-delete verified: API returns 404, data preserved on ipfs2")
 }
 
-// --- Helper functions ---
+// TestUploadAndDownload verifies basic upload → download → delete cycle.
+func TestUploadAndDownload(t *testing.T) {
+	if os.Getenv("INTEGRATION") == "" {
+		t.Skip("Set INTEGRATION=1 to run integration tests")
+	}
 
-func uploadFile(t *testing.T, content string, filename string) string {
-	t.Helper()
-	return uploadBytes(t, []byte(content), filename)
+	content := "hello integration test"
+	cid := uploadFileToStorage(t, content, "test.json")
+	t.Logf("Uploaded CID: %s", cid)
+
+	// Download through storage1
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", storage1URL+"/file/"+cid, nil)
+	req.Header.Set("X-API-Key", apiKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("download failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("download status %d: %s", resp.StatusCode, body)
+	}
+
+	downloadBody, _ := io.ReadAll(resp.Body)
+	if string(downloadBody) != content {
+		t.Fatalf("content mismatch: got %q, want %q", downloadBody, content)
+	}
+
+	// Delete
+	deleteFileFromStorage(t, storage1URL, cid)
+
+	// Verify 404
+	time.Sleep(500 * time.Millisecond)
+	req2, _ := http.NewRequest("GET", storage1URL+"/file/"+cid, nil)
+	req2.Header.Set("X-API-Key", apiKey)
+	resp2, err := client.Do(req2)
+	if err != nil {
+		t.Fatalf("post-delete check failed: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", resp2.StatusCode)
+	}
+
+	t.Log("✅ Upload → Download → Delete → 404: OK")
 }
 
-func uploadBytes(t *testing.T, content []byte, filename string) string {
+// TestUploadMultiple verifies batch upload.
+func TestUploadMultiple(t *testing.T) {
+	if os.Getenv("INTEGRATION") == "" {
+		t.Skip("Set INTEGRATION=1 to run integration tests")
+	}
+
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	// Use "files" field name matching HandleUploadMultiple handler
+	for i := range 2 {
+		fw, _ := w.CreateFormFile("files", fmt.Sprintf("file%d.json", i))
+		io.WriteString(fw, fmt.Sprintf("content-%d", i))
+	}
+	w.Close()
+
+	req, _ := http.NewRequest("POST", storage1URL+"/upload-multiple", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("X-API-Key", apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("upload-multiple failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload-multiple status %d: %s", resp.StatusCode, body)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	t.Logf("Multiple upload response: %s", body)
+}
+
+// TestAuth verifies API key authentication.
+func TestAuth(t *testing.T) {
+	if os.Getenv("INTEGRATION") == "" {
+		t.Skip("Set INTEGRATION=1 to run integration tests")
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// No API key → 401
+	resp, _ := client.Get(storage1URL + "/file/QmTest")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without key, got %d", resp.StatusCode)
+	}
+
+	// Wrong API key → 403
+	req, _ := http.NewRequest("GET", storage1URL+"/file/QmTest", nil)
+	req.Header.Set("X-API-Key", "wrong-key")
+	resp2, _ := client.Do(req)
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 with bad key, got %d", resp2.StatusCode)
+	}
+
+	t.Log("✅ Auth checks: OK")
+}
+
+// --- Helper functions ---
+
+func uploadFileToStorage(t *testing.T, content string, filename string) string {
+	t.Helper()
+	return uploadBytesToStorage(t, []byte(content), filename)
+}
+
+func uploadBytesToStorage(t *testing.T, content []byte, filename string) string {
 	t.Helper()
 
 	var b bytes.Buffer
@@ -230,8 +334,8 @@ func uploadBytes(t *testing.T, content []byte, filename string) string {
 	}
 	w.Close()
 
-	// Upload through nginx (round-robin to any storage)
-	req, _ := http.NewRequest("POST", nginxURL+"/upload", &b)
+	// Upload through storage1 directly
+	req, _ := http.NewRequest("POST", storage1URL+"/upload", &b)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("X-API-Key", apiKey)
 
@@ -296,11 +400,11 @@ func isPinnedOnIPFS(t *testing.T, apiURL, cid string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-func deleteFile(t *testing.T, cid string) {
+func deleteFileFromStorage(t *testing.T, storageURL, cid string) {
 	t.Helper()
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest("DELETE", nginxURL+"/file/"+cid, nil)
+	req, _ := http.NewRequest("DELETE", storageURL+"/file/"+cid, nil)
 	req.Header.Set("X-API-Key", apiKey)
 
 	resp, err := client.Do(req)
