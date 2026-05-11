@@ -34,6 +34,7 @@ func main() {
 	wrapped := middleware.Chain(
 		mux,
 		middleware.PanicRecovery(),
+		middleware.APIKeyAuth(cfg.API.Keys),
 		middleware.CORS(cfg.CORS.AllowedOrigins, cfg.CORS.AllowedHeaders),
 	)
 
