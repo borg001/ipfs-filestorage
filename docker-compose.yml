@@ -16,11 +16,11 @@ services:
     networks:
       - storage-net
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "--method=POST", "http://localhost:5001/api/v0/id"]
+      test: ["CMD", "wget", "-q", "--post-data=", "-O", "/dev/null", "http://localhost:5001/api/v0/id"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      start_period: 60s
 
   # Storage IPFS node 1
   ipfs1:
@@ -45,11 +45,11 @@ services:
       ipfs-bootstrap:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "--method=POST", "http://localhost:5001/api/v0/id"]
+      test: ["CMD", "wget", "-q", "--post-data=", "-O", "/dev/null", "http://localhost:5001/api/v0/id"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 60s
 
   # Storage IPFS node 2
   ipfs2:
@@ -74,11 +74,11 @@ services:
       ipfs-bootstrap:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "--method=POST", "http://localhost:5001/api/v0/id"]
+      test: ["CMD", "wget", "-q", "--post-data=", "-O", "/dev/null", "http://localhost:5001/api/v0/id"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 60s
 
   # Storage API service 1
   storage1:
