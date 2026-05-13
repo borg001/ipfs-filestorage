@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # Bootstrap node — lightweight peer discovery only, no user data
   ipfs-bootstrap:
@@ -26,8 +24,6 @@ services:
   ipfs1:
     image: ipfs/kubo:latest
     container_name: ipfs1
-    ports:
-      - "5001:5001"   # IPFS API (for direct access / integration tests)
     volumes:
       - ipfs1-data:/data/ipfs
       - ./swarm.key:/key/swarm.key:ro
@@ -54,8 +50,6 @@ services:
   ipfs2:
     image: ipfs/kubo:latest
     container_name: ipfs2
-    ports:
-      - "5002:5001"   # IPFS API on host port 5002 (for integration tests)
     volumes:
       - ipfs2-data:/data/ipfs
       - ./swarm.key:/key/swarm.key:ro
