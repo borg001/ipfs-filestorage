@@ -14,8 +14,7 @@ services:
       - IPFS_SWARM_KEY=/key/swarm.key
     entrypoint: ["/bin/sh", "/usr/local/bin/ipfs-bootstrap-init.sh"]
     networks:
-      storage-net:
-        ipv4_address: 172.20.0.10
+      - storage-net
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "--method=POST", "http://localhost:5001/api/v0/id"]
       interval: 10s
@@ -155,6 +154,3 @@ volumes:
 networks:
   storage-net:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/24
