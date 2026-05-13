@@ -27,8 +27,7 @@ services:
     image: ipfs/kubo:latest
     container_name: ipfs1
     ports:
-      - "5001:5001"   # IPFS API
-      - "4001:4001"   # Swarm TCP
+      - "5001:5001"   # IPFS API (for direct access / integration tests)
     volumes:
       - ipfs1-data:/data/ipfs
       - ./swarm.key:/key/swarm.key:ro
@@ -56,8 +55,7 @@ services:
     image: ipfs/kubo:latest
     container_name: ipfs2
     ports:
-      - "5002:5001"   # IPFS API on host port 5002
-      - "4002:4001"   # Swarm TCP on host port 4002
+      - "5002:5001"   # IPFS API on host port 5002 (for integration tests)
     volumes:
       - ipfs2-data:/data/ipfs
       - ./swarm.key:/key/swarm.key:ro
