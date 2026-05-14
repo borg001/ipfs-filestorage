@@ -27,7 +27,7 @@ func TestCluster_Add_Replicate_Cat_Unpin(t *testing.T) {
 	}
 	t.Logf("ClusterAdd CID: %s", result.CID)
 
-	// Replicate (Fetch + Pin) instead of PinAll
+	// Replicate (Fetch + Pin)
 	t.Log("Running ClusterReplicate...")
 	if err := cm.ClusterReplicate(ctx, result.CID, 3, 100*time.Millisecond); err != nil {
 		t.Fatalf("ClusterReplicate failed: %v", err)
@@ -80,7 +80,7 @@ func TestCluster_NoNodes(t *testing.T) {
 		t.Fatal("expected error for empty cluster")
 	}
 	if _, err := cm.ClusterStat(ctx, "cid"); err == nil {
-		t.Fatal("expected error for empty cluster")
+		t	t.Fatal("expected error for empty cluster")
 	}
 	if cm.ClusterIsPinnedAll(ctx, "cid") {
 		t.Fatal("expected false for empty cluster")

@@ -58,6 +58,18 @@ func NewHandler(cfg *config.Config) *Handler {
 	return h
 }
 
+// countingReader оборачивает io.Reader и считает прочитанные байты.
+type countingReader struct {
+	r        io.Reader
+	bytesRead int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	cr.bytesRead += int64(n)
+	return n, err
+}
+
 // HandleUpload обрабатывает POST /upload (один файл).
 func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -71,15 +83,6 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Валидация размера
-	if header.Size > h.cfg.Upload.MaxFileSize {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
-			"error":   "File too large",
-			"maxSize": h.cfg.Upload.MaxFileSize,
-		})
-		return
-	}
-
 	// Валидация типа
 	if err := validateFile(header.Filename, header.Header.Get("Content-Type"), h.cfg); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
@@ -89,11 +92,26 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Оборачиваем reader в countingReader для серверной проверки размера.
+	// Не доверяем header.Size из multipart — его легко подделать.
+	limitedReader := &countingReader{r: io.LimitReader(file, h.cfg.Upload.MaxFileSize+1)}
+
 	// Загрузка на первую ноду
 	ctx := r.Context()
-	result, err := h.cluster.ClusterAdd(ctx, header.Filename, file)
+	result, err := h.cluster.ClusterAdd(ctx, header.Filename, limitedReader)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Upload failed"})
+		return
+	}
+
+	// Серверная проверка: если прочитано больше MaxFileSize — файл слишком большой.
+	// Это достоверная проверка, основанная на реальных байтах, а не на заголовке.
+	if limitedReader.bytesRead > h.cfg.Upload.MaxFileSize {
+		_ = h.cluster.ClusterUnpinAll(ctx, result.CID)
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
+			"error":   "File too large",
+			"maxSize": h.cfg.Upload.MaxFileSize,
+		})
 		return
 	}
 
@@ -104,10 +122,11 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Используем проверенный сервером размер, а не header.Size
 	resp := Response{
 		CID:    result.CID,
 		Name:   header.Filename,
-		Size:   header.Size,
+		Size:   limitedReader.bytesRead,
 		Pinned: true,
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -125,16 +144,9 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация
+	// Валидация типов
 	invalid := make([]string, 0)
 	for _, fh := range files {
-		if fh.Size > h.cfg.Upload.MaxFileSize {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
-				"error":   "File too large",
-				"maxSize": h.cfg.Upload.MaxFileSize,
-			})
-			return
-		}
 		if err := validateFile(fh.Filename, fh.Header.Get("Content-Type"), h.cfg); err != nil {
 			invalid = append(invalid, fh.Filename)
 		}
@@ -170,10 +182,21 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			}
 			defer f.Close()
 
-			result, err := h.cluster.ClusterAdd(ctx, fileHeader.Filename, f)
+			// Серверная проверка размера через countingReader
+			limitedReader := &countingReader{r: io.LimitReader(f, h.cfg.Upload.MaxFileSize+1)}
+
+			result, err := h.cluster.ClusterAdd(ctx, fileHeader.Filename, limitedReader)
 			if err != nil {
 				mu.Lock()
 				errorsList = append(errorsList, fmt.Sprintf("%s: upload failed", fileHeader.Filename))
+				mu.Unlock()
+				return
+			}
+
+			if limitedReader.bytesRead > h.cfg.Upload.MaxFileSize {
+				_ = h.cluster.ClusterUnpinAll(ctx, result.CID)
+				mu.Lock()
+				errorsList = append(errorsList, fmt.Sprintf("%s: file too large", fileHeader.Filename))
 				mu.Unlock()
 				return
 			}
@@ -185,7 +208,7 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			results[idx] = Response{
 				CID:    result.CID,
 				Name:   fileHeader.Filename,
-				Size:   fileHeader.Size,
+				Size:   limitedReader.bytesRead,
 				Pinned: true,
 			}
 			mu.Unlock()

@@ -6,6 +6,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/ipfs/boxo/path"
 )
 
 // ClusterManager управляет репликацией файлов по всем нодам IPFS-кластера.
