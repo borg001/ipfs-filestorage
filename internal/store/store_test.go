@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -18,7 +19,6 @@ func TestConcurrentAccess(t *testing.T) {
 	const goroutines = 50
 	const cidsPerGoroutine = 10
 
-	// Параллельные записи
 	for g := 0; g < goroutines; g++ {
 		wg.Add(1)
 		go func(gid int) {
@@ -47,7 +47,6 @@ func TestConcurrentAddAndHas(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// Параллельные записи и чтения
 	for g := 0; g < 20; g++ {
 		wg.Add(2)
 		go func(gid int) {
@@ -71,7 +70,6 @@ func TestConcurrentAddAndRemoveGroup(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// Параллельные AddGroup и RemoveGroup
 	for g := 0; g < 10; g++ {
 		master := "QmMaster" + string(rune('A'+g))
 		allCIDs := []string{master, master + "_v1", master + "_v2"}
@@ -87,8 +85,6 @@ func TestConcurrentAddAndRemoveGroup(t *testing.T) {
 		}(master)
 	}
 	wg.Wait()
-
-	// Не должно паниковать — это главное
 }
 
 func TestAddGroup(t *testing.T) {
@@ -155,6 +151,9 @@ func TestRemoveGroupPartialOverlap(t *testing.T) {
 
 	s.RemoveGroup("QmD")
 
+	if !s.Has("QmB") {
+		t.Error("QmB should still be in unpin list (part of QmA group)")
+	}
 	if !s.Has("QmA") {
 		t.Error("QmA should still be in unpin list")
 	}
@@ -212,9 +211,9 @@ func TestLegacyFormatLoad(t *testing.T) {
 	path := filepath.Join(dir, "legacy-store.json")
 
 	legacy := `[{"cid":"QmLegacy1","unpinned_at":"2025-01-01T00:00:00Z"},{"cid":"QmLegacy2","unpinned_at":"2025-01-01T00:00:00Z"}]`
-	filepath.Join(dir, "legacy-store.json")
-	_ = filepath.Join(dir, "legacy-store.json")
-	writeFile(t, path, legacy)
+	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	s, err := NewUnpinStore(path)
 	if err != nil {
@@ -261,12 +260,5 @@ func TestAll(t *testing.T) {
 	all := s.All()
 	if len(all) != 2 {
 		t.Errorf("All() returned %d entries, want 2", len(all))
-	}
-}
-
-func writeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
 	}
 }

@@ -7,21 +7,20 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
-	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 )
 
-// videoMockAdder реализует video.IPFSAdder для handler-тестов
-type videoMockAdder struct{}
-
-func setupVideoTestHandler(cfg *config.Config) *Handler {
+func setupVideoTestHandler(t *testing.T, cfg *config.Config) *Handler {
+	t.Helper()
 	cluster := newMockCluster()
-	unpinStore, _ := store.NewUnpinStore(filepath.Join(t.TempDir(), "test-unpin.json"))
+	unpinStore, err := store.NewUnpinStore(filepath.Join(t.TempDir(), "test-unpin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &Handler{
 		cfg:        cfg,
 		cluster:    cluster,
@@ -34,7 +33,7 @@ func TestHandleStreamMaster(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 	cluster := h.cluster.(*mockCluster)
 
 	masterContent := "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\nQmLow\n"
@@ -57,7 +56,7 @@ func TestHandleStreamMasterNotFound(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/stream/QmNonExistent/master.m3u8", nil)
 	w := httptest.NewRecorder()
@@ -73,7 +72,7 @@ func TestHandleStreamMasterInvalidURL(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/stream/", nil)
 	w := httptest.NewRecorder()
@@ -89,7 +88,7 @@ func TestHandleStreamMasterDeletedVideo(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 	h.unpinStore.Add("QmDeleted")
 
 	req := httptest.NewRequest(http.MethodGet, "/stream/QmDeleted/master.m3u8", nil)
@@ -106,7 +105,7 @@ func TestHandleStreamSegment(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 	cluster := h.cluster.(*mockCluster)
 
 	segmentData := []byte("fake-m4s-segment-data")
@@ -132,7 +131,7 @@ func TestHandleStreamSegmentPlaylist(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 	cluster := h.cluster.(*mockCluster)
 
 	playlistData := []byte("#EXTM3U\n#EXTINF:4,\nQmSeg1.m4s\n")
@@ -155,7 +154,7 @@ func TestHandleStreamSegmentNoCID(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/stream/segment/", nil)
 	w := httptest.NewRecorder()
@@ -171,7 +170,7 @@ func TestHandleStreamSegmentNotFound(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmNonExistent.m4s", nil)
 	w := httptest.NewRecorder()
@@ -187,7 +186,7 @@ func TestHandleStreamSegmentDeleted(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 	h.unpinStore.Add("QmDeletedSeg")
 
 	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmDeletedSeg.m4s", nil)
@@ -204,7 +203,7 @@ func TestHandleUploadVideoNoFile(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 
 	req := httptest.NewRequest(http.MethodPost, "/upload-video", nil)
 	w := httptest.NewRecorder()
@@ -220,7 +219,7 @@ func TestHandleUploadVideoNotVideoExt(t *testing.T) {
 		Video:   config.VideoConfig{TempDir: t.TempDir()},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -246,7 +245,7 @@ func TestHandleUploadVideoNotVideoExt(t *testing.T) {
 
 func TestHandleUploadVideoTooLarge(t *testing.T) {
 	tmpDir := t.TempDir()
-	maxBytes := int64(1024) // 1KB лимит для теста
+	maxBytes := int64(1024)
 
 	cfg := &config.Config{
 		Video: config.VideoConfig{
@@ -255,12 +254,11 @@ func TestHandleUploadVideoTooLarge(t *testing.T) {
 		},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "video.mp4")
-	// Пишем 2KB — больше лимита
 	io.Copy(part, bytes.NewReader(make([]byte, 2*1024)))
 	writer.Close()
 
@@ -269,7 +267,6 @@ func TestHandleUploadVideoTooLarge(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleUploadVideo(w, req)
 
-	// Валидатор должен вернуть ошибку о размере файла
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Status = %d, want 400 for file too large", w.Code)
 	}
@@ -292,9 +289,8 @@ func TestHandleUploadVideoFFprobeFails(t *testing.T) {
 		},
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
-	h := setupVideoTestHandler(cfg)
+	h := setupVideoTestHandler(t, cfg)
 
-	// Создаём минимальный mp4-файл (ненастоящий, но с нужным расширением)
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "clip.mp4")
@@ -306,7 +302,6 @@ func TestHandleUploadVideoFFprobeFails(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleUploadVideo(w, req)
 
-	// ffprobe не найден → валидация фейлится → 400
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Status = %d, want 400 when ffprobe fails", w.Code)
 	}

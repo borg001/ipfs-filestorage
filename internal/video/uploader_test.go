@@ -13,12 +13,11 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 )
 
-// mockAdder реализует IPFSAdder для тестов
 type mockAdder struct {
 	mu        sync.Mutex
 	callCount int
-	errAfter  int    // вернуть ошибку после N вызовов (0 = никогда)
-	errMsg    string // текст ошибки
+	errAfter  int
+	errMsg    string
 }
 
 func (m *mockAdder) Add(ctx context.Context, filename string, r io.Reader) (*ipfs.AddResult, error) {
@@ -31,7 +30,7 @@ func (m *mockAdder) Add(ctx context.Context, filename string, r io.Reader) (*ipf
 		return nil, fmt.Errorf(m.errMsg)
 	}
 
-	data, _ := io.ReadAll(r)
+	io.ReadAll(r)
 	cid := fmt.Sprintf("QmFile%d", cnt)
 	return &ipfs.AddResult{CID: cid, Name: filename}, nil
 }
@@ -46,7 +45,7 @@ func TestUploadDirEmpty(t *testing.T) {
 	u := NewUploader(nil)
 	outputDir := t.TempDir()
 
-	_, err := u.UploadDir(t.Context(), outputDir)
+	_, err := u.UploadDir(context.Background(), outputDir)
 	if err == nil {
 		t.Error("Expected error for empty directory")
 	}
@@ -57,7 +56,7 @@ func TestUploadDirNilAdder(t *testing.T) {
 	outputDir := t.TempDir()
 	os.WriteFile(filepath.Join(outputDir, "test.m4s"), []byte("data"), 0644)
 
-	_, err := u.UploadDir(t.Context(), outputDir)
+	_, err := u.UploadDir(context.Background(), outputDir)
 	if err == nil {
 		t.Error("Expected error for nil adder")
 	}
@@ -83,7 +82,7 @@ func TestUploadDirWithFiles(t *testing.T) {
 
 	adder := &mockAdder{}
 	u := NewUploader(adder)
-	result, err := u.UploadDir(t.Context(), outputDir)
+	result, err := u.UploadDir(context.Background(), outputDir)
 	if err != nil {
 		t.Fatalf("UploadDir failed: %v", err)
 	}
@@ -94,7 +93,7 @@ func TestUploadDirWithFiles(t *testing.T) {
 	if len(result.VariantCIDs) != 3 {
 		t.Errorf("Expected 3 variant CIDs, got %d", len(result.VariantCIDs))
 	}
-	if len(result.AllCIDs) < 7 { // 3 playlists + 3 segments + 1 master = 7
+	if len(result.AllCIDs) < 7 {
 		t.Errorf("Expected at least 7 allCIDs, got %d", len(result.AllCIDs))
 	}
 	if len(result.SegmentCIDs) != 3 {
@@ -112,7 +111,7 @@ func TestUploadDirOnlySegments(t *testing.T) {
 
 	adder := &mockAdder{}
 	u := NewUploader(adder)
-	result, err := u.UploadDir(t.Context(), outputDir)
+	result, err := u.UploadDir(context.Background(), outputDir)
 	if err != nil {
 		t.Fatalf("UploadDir with only segments failed: %v", err)
 	}
@@ -120,7 +119,6 @@ func TestUploadDirOnlySegments(t *testing.T) {
 	if len(result.SegmentCIDs) != 2 {
 		t.Errorf("Expected 2 segment CIDs, got %d", len(result.SegmentCIDs))
 	}
-	// Master playlist should still be generated
 	if result.MasterCID == "" {
 		t.Error("MasterCID should not be empty even without variant playlists")
 	}
@@ -134,7 +132,7 @@ func TestUploadDirAdderError(t *testing.T) {
 
 	adder := &mockAdder{errAfter: 1, errMsg: "ipfs connection refused"}
 	u := NewUploader(adder)
-	_, err := u.UploadDir(t.Context(), outputDir)
+	_, err := u.UploadDir(context.Background(), outputDir)
 	if err == nil {
 		t.Error("Expected error when adder fails")
 	}
@@ -178,7 +176,6 @@ func TestRewriteVariantPlaylistMissingSegment(t *testing.T) {
 	lowDir := filepath.Join(outputDir, "low")
 	os.MkdirAll(lowDir, 0755)
 
-	// Ссылка на seg_1.m4s, которого нет в fileCIDs — должна остаться как есть
 	playlist := "#EXTM3U\n#EXTINF:4.000,\nseg_0.m4s\n#EXTINF:4.000,\nseg_2.m4s\n#EXT-X-ENDLIST\n"
 	os.WriteFile(filepath.Join(lowDir, "playlist.m3u8"), []byte(playlist), 0644)
 
@@ -195,7 +192,6 @@ func TestRewriteVariantPlaylistMissingSegment(t *testing.T) {
 	if !strings.Contains(result, "QmSeg0.m4s") {
 		t.Error("Known segment should be replaced with CID")
 	}
-	// Неизвестный сегмент остаётся как есть
 	if !strings.Contains(result, "seg_2.m4s") {
 		t.Error("Unknown segment should remain as original filename")
 	}
@@ -269,7 +265,6 @@ func TestReplaceInSlice(t *testing.T) {
 		t.Errorf("replaceInSlice: got len %d, want 3", len(result))
 	}
 
-	// Замена несуществующего элемента — ничего не меняется
 	result2 := replaceInSlice(s, "z", "y")
 	if len(result2) != 3 {
 		t.Errorf("replaceInSlice with missing: got len %d, want 3", len(result2))
@@ -277,7 +272,6 @@ func TestReplaceInSlice(t *testing.T) {
 }
 
 func TestReplaceInSliceDedup(t *testing.T) {
-	// Проверяем что после rewrite AllCIDs обновляется корректно
 	s := []string{"QmA", "QmOld", "QmB"}
 	result := replaceInSlice(s, "QmOld", "QmNew")
 	found := false

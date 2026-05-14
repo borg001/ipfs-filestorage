@@ -7,7 +7,6 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
-	// Очищаем env чтобы тестировались дефолты
 	envKeys := []string{
 		"SERVER_PORT", "IPFS_URL", "CLUSTER_NODES",
 		"API_KEYS", "UPLOAD_MAX_FILE_SIZE", "UPLOAD_ALLOWED_EXTENSIONS",
@@ -100,7 +99,6 @@ func TestGetEnvIntInvalid(t *testing.T) {
 	t.Setenv("PINNING_RETRIES", "notanumber")
 	cfg := Load()
 
-	// Должен вернуть дефолт при невалидном значении
 	if cfg.Pinning.Retries != 3 {
 		t.Errorf("Pinning.Retries with invalid env = %d, want default 3", cfg.Pinning.Retries)
 	}
@@ -137,7 +135,6 @@ func TestGetEnvSliceEmpty(t *testing.T) {
 	t.Setenv("API_KEYS", "")
 	cfg := Load()
 
-	// При пустом env — дефолт
 	if len(cfg.API.Keys) != 2 {
 		t.Errorf("API.Keys with empty env len = %d, want default 2", len(cfg.API.Keys))
 	}

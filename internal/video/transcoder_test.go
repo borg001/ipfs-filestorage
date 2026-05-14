@@ -1,6 +1,7 @@
 package video
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,7 +88,6 @@ func TestBuildHLSArgs(t *testing.T) {
 	tr := NewTranscoder(cfg)
 	args := tr.buildHLSArgs("/tmp/input.mp4", "/tmp/output")
 
-	// Проверяем ключевые аргументы
 	hasInput := false
 	hasHlsTime := false
 	hasHlsSegmentType := false
@@ -135,7 +135,6 @@ func TestBuildHLSArgs(t *testing.T) {
 		t.Error("HLS args missing -keyint_min")
 	}
 
-	// Проверяем, что для каждого битрейта есть свой выходной файл
 	outputFiles := 0
 	for _, arg := range args {
 		if filepath.Ext(arg) == ".m3u8" {
@@ -159,7 +158,6 @@ func TestBuildHLSArgsBitrateParams(t *testing.T) {
 	args := tr.buildHLSArgs("/tmp/input.mp4", "/tmp/output")
 	argsStr := strings.Join(args, " ")
 
-	// Проверяем что для low битрейта правильные параметры
 	if !strings.Contains(argsStr, "-b:v 500k") {
 		t.Error("Missing -b:v 500k for low bitrate")
 	}
@@ -189,7 +187,6 @@ func TestBuildHLSArgsSegmentFilenames(t *testing.T) {
 	args := tr.buildHLSArgs("/tmp/input.mp4", "/tmp/output")
 	argsStr := strings.Join(args, " ")
 
-	// Проверяем что сегменты лежат в правильных поддиректориях
 	if !strings.Contains(argsStr, "low/seg_%d.m4s") {
 		t.Error("Missing low/seg_%d.m4s segment filename pattern")
 	}
@@ -209,9 +206,8 @@ func TestTranscodeMissingInput(t *testing.T) {
 	}
 
 	tr := NewTranscoder(cfg)
-	ctx := t.Context()
 
-	_, err := tr.Transcode(ctx, "/nonexistent/input.mp4", t.TempDir())
+	_, err := tr.Transcode(context.Background(), "/nonexistent/input.mp4", t.TempDir())
 	if err == nil {
 		t.Error("Expected error for missing input file")
 	}
@@ -223,9 +219,8 @@ func TestProbeDurationInvalidPath(t *testing.T) {
 	}
 
 	tr := NewTranscoder(cfg)
-	ctx := t.Context()
 
-	_, err := tr.probeDuration(ctx, "/nonexistent/file.mp4")
+	_, err := tr.probeDuration(context.Background(), "/nonexistent/file.mp4")
 	if err == nil {
 		t.Error("Expected error for nonexistent file in probeDuration")
 	}
