@@ -1,26 +1,26 @@
 package video
 
 import (
-	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 )
 
 // mockAdder реализует IPFSAdder для тестов
 type mockAdder struct {
-	addFunc func(ctx context.Context, filename string, r io.Reader) (*ipfs.AddResult, error)
+	callCount int
 }
 
 func (m *mockAdder) Add(ctx context.Context, filename string, r io.Reader) (*ipfs.AddResult, error) {
-	if m.addFunc != nil {
-		return m.addFunc(ctx, filename, r)
-	}
+	m.callCount++
 	data, _ := io.ReadAll(r)
-	cid := fmt.Sprintf("QmMock%d%x", len(data), len(data))
+	cid := fmt.Sprintf("QmFile%d", m.callCount)
 	return &ipfs.AddResult{CID: cid, Name: filename}, nil
 }
 
@@ -34,35 +34,37 @@ func TestUploadDirEmpty(t *testing.T) {
 	}
 }
 
-func TestUploadDirWithFiles(t *testing.T) {
-	// Создаём структуру HLS
+func TestUploadDirNilAdder(t *testing.T) {
+	u := NewUploader(nil)
 	outputDir := t.TempDir()
-	lowDir := outputDir + "/low"
-	medDir := outputDir + "/medium"
-	highDir := outputDir + "/high"
+	os.WriteFile(filepath.Join(outputDir, "test.m4s"), []byte("data"), 0644)
+
+	_, err := u.UploadDir(t.Context(), outputDir)
+	if err == nil {
+		t.Error("Expected error for nil adder")
+	}
+}
+
+func TestUploadDirWithFiles(t *testing.T) {
+	outputDir := t.TempDir()
+	lowDir := filepath.Join(outputDir, "low")
+	medDir := filepath.Join(outputDir, "medium")
+	highDir := filepath.Join(outputDir, "high")
 
 	os.MkdirAll(lowDir, 0755)
 	os.MkdirAll(medDir, 0755)
 	os.MkdirAll(highDir, 0755)
 
-	os.WriteFile(lowDir+"/playlist.m3u8", []byte("#EXTM3U\n#EXTINF:4,\nseg_0.m4s\n#EXT-X-ENDLIST\n"), 0644)
-	os.WriteFile(lowDir+"/seg_0.m4s", []byte("fake-segment-data-low"), 0644)
-	os.WriteFile(medDir+"/playlist.m3u8", []byte("#EXTM3U\n#EXTINF:4,\nseg_0.m4s\n#EXT-X-ENDLIST\n"), 0644)
-	os.WriteFile(medDir+"/seg_0.m4s", []byte("fake-segment-data-med"), 0644)
-	os.WriteFile(highDir+"/playlist.m3u8", []byte("#EXTM3U\n#EXTINF:4,\nseg_0.m4s\n#EXT-X-ENDLIST\n"), 0644)
-	os.WriteFile(highDir+"/seg_0.m4s", []byte("fake-segment-data-high"), 0644)
+	playlist := "#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:4.000,\nseg_0.m4s\n#EXT-X-ENDLIST\n"
+	os.WriteFile(filepath.Join(lowDir, "playlist.m3u8"), []byte(playlist), 0644)
+	os.WriteFile(filepath.Join(lowDir, "seg_0.m4s"), []byte("fake-segment-data-low"), 0644)
+	os.WriteFile(filepath.Join(medDir, "playlist.m3u8"), []byte(playlist), 0644)
+	os.WriteFile(filepath.Join(medDir, "seg_0.m4s"), []byte("fake-segment-data-med"), 0644)
+	os.WriteFile(filepath.Join(highDir, "playlist.m3u8"), []byte(playlist), 0644)
+	os.WriteFile(filepath.Join(highDir, "seg_0.m4s"), []byte("fake-segment-data-high"), 0644)
 
-	callCount := 0
-	adder := &mockAdder{
-		addFunc: func(ctx context.Context, filename string, r io.Reader) (*ipfs.AddResult, error) {
-			callCount++
-			data, _ := io.ReadAll(r)
-			cid := fmt.Sprintf("QmFile%d", callCount)
-			return &ipfs.AddResult{CID: cid, Name: filename}, nil
-		},
-	}
-
-	u := &Uploader{adder: adder}
+	adder := &mockAdder{}
+	u := NewUploader(adder)
 	result, err := u.UploadDir(t.Context(), outputDir)
 	if err != nil {
 		t.Fatalf("UploadDir failed: %v", err)
@@ -74,11 +76,14 @@ func TestUploadDirWithFiles(t *testing.T) {
 	if len(result.VariantCIDs) != 3 {
 		t.Errorf("Expected 3 variant CIDs, got %d", len(result.VariantCIDs))
 	}
-	if len(result.AllCIDs) < 7 { // 3 playlists + 3 segments + 1 master
+	if len(result.AllCIDs) < 7 { // 3 playlists + 3 segments + 1 master = 7
 		t.Errorf("Expected at least 7 allCIDs, got %d", len(result.AllCIDs))
 	}
 	if len(result.SegmentCIDs) != 3 {
 		t.Errorf("Expected 3 segment CIDs, got %d", len(result.SegmentCIDs))
+	}
+	if adder.callCount < 7 {
+		t.Errorf("Expected at least 7 Add calls, got %d", adder.callCount)
 	}
 }
 
@@ -125,7 +130,6 @@ func TestBuildMasterPlaylistOrder(t *testing.T) {
 		t.Fatalf("buildMasterPlaylist failed: %v", err)
 	}
 
-	// Порядок: low → medium → high
 	lowIdx := strings.Index(content, "QmLow")
 	medIdx := strings.Index(content, "QmMed")
 	highIdx := strings.Index(content, "QmHigh")
@@ -153,7 +157,6 @@ func TestBuildMasterPlaylistMissingVariant(t *testing.T) {
 	variantCIDs := map[string]string{
 		"low":  "QmLow",
 		"high": "QmHigh",
-		// medium отсутствует
 	}
 
 	content, err := u.buildMasterPlaylist(variantCIDs, nil)

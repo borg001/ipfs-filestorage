@@ -7,8 +7,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
@@ -27,11 +25,9 @@ func TestHandleStreamMaster(t *testing.T) {
 	h := setupTestHandler(cfg)
 	cluster := h.cluster.(*mockCluster)
 
-	// Добавляем тестовый мастер-плейлист в mock
 	masterContent := "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\nQmLow\n"
 	cluster.files["QmMasterTest"] = []byte(masterContent)
 
-	// Успешный запрос
 	req := httptest.NewRequest(http.MethodGet, "/stream/QmMasterTest/master.m3u8", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamMaster(w, req)
@@ -49,13 +45,8 @@ func TestHandleStreamMaster(t *testing.T) {
 
 func TestHandleStreamMasterNotFound(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
 
@@ -70,17 +61,11 @@ func TestHandleStreamMasterNotFound(t *testing.T) {
 
 func TestHandleStreamMasterInvalidURL(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
 
-	// URL без CID
 	req := httptest.NewRequest(http.MethodGet, "/stream/", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamMaster(w, req)
@@ -92,17 +77,10 @@ func TestHandleStreamMasterInvalidURL(t *testing.T) {
 
 func TestHandleStreamMasterDeletedVideo(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
-
-	// Добавляем CID в unpin-список (soft-delete)
 	h.unpinStore.Add("QmDeleted")
 
 	req := httptest.NewRequest(http.MethodGet, "/stream/QmDeleted/master.m3u8", nil)
@@ -116,13 +94,8 @@ func TestHandleStreamMasterDeletedVideo(t *testing.T) {
 
 func TestHandleStreamSegment(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
 	cluster := h.cluster.(*mockCluster)
@@ -130,7 +103,6 @@ func TestHandleStreamSegment(t *testing.T) {
 	segmentData := []byte("fake-m4s-segment-data")
 	cluster.files["QmSegTest"] = segmentData
 
-	// Запрос чанка с расширением .m4s
 	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmSegTest.m4s", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamSegment(w, req)
@@ -144,17 +116,15 @@ func TestHandleStreamSegment(t *testing.T) {
 	if !bytes.Equal(w.Body.Bytes(), segmentData) {
 		t.Error("Response body mismatch")
 	}
+	if cc := w.Header().Get("Cache-Control"); cc != "public, max-age=86400" {
+		t.Errorf("Cache-Control = %q, want public, max-age=86400", cc)
+	}
 }
 
 func TestHandleStreamSegmentPlaylist(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
 	cluster := h.cluster.(*mockCluster)
@@ -162,7 +132,6 @@ func TestHandleStreamSegmentPlaylist(t *testing.T) {
 	playlistData := []byte("#EXTM3U\n#EXTINF:4,\nQmSeg1.m4s\n")
 	cluster.files["QmPlaylistTest"] = playlistData
 
-	// Запрос вариантного плейлиста с расширением .m3u8
 	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmPlaylistTest.m3u8", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamSegment(w, req)
@@ -173,20 +142,12 @@ func TestHandleStreamSegmentPlaylist(t *testing.T) {
 	if ct := w.Header().Get("Content-Type"); ct != "application/vnd.apple.mpegurl" {
 		t.Errorf("Content-Type = %q, want application/vnd.apple.mpegurl", ct)
 	}
-	if cc := w.Header().Get("Cache-Control"); cc != "public, max-age=86400" {
-		t.Errorf("Cache-Control = %q, want public, max-age=86400", cc)
-	}
 }
 
 func TestHandleStreamSegmentNoCID(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
 
@@ -201,13 +162,8 @@ func TestHandleStreamSegmentNoCID(t *testing.T) {
 
 func TestHandleStreamSegmentNotFound(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
 
@@ -222,16 +178,10 @@ func TestHandleStreamSegmentNotFound(t *testing.T) {
 
 func TestHandleStreamSegmentDeleted(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
-
 	h.unpinStore.Add("QmDeletedSeg")
 
 	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmDeletedSeg.m4s", nil)
@@ -245,13 +195,8 @@ func TestHandleStreamSegmentDeleted(t *testing.T) {
 
 func TestHandleUploadVideoNoFile(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
 
@@ -266,13 +211,8 @@ func TestHandleUploadVideoNoFile(t *testing.T) {
 
 func TestHandleUploadVideoNotVideoExt(t *testing.T) {
 	cfg := &config.Config{
-		Video: config.VideoConfig{
-			TempDir: t.TempDir(),
-		},
-		Pinning: config.PinningConfig{
-			RetryDelayMs: 100,
-			Retries:      1,
-		},
+		Video: config.VideoConfig{TempDir: t.TempDir()},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupTestHandler(cfg)
 

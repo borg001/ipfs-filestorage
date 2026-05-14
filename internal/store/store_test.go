@@ -19,14 +19,12 @@ func TestAddGroup(t *testing.T) {
 
 	s.AddGroup(masterCID, allCIDs)
 
-	// Все CID из группы должны быть в unpin-списке
 	for _, cid := range allCIDs {
 		if !s.Has(cid) {
 			t.Errorf("Has(%q) = false, expected true after AddGroup", cid)
 		}
 	}
 
-	// GetGroup должен вернуть все CID
 	group := s.GetGroup(masterCID)
 	if len(group) != len(allCIDs) {
 		t.Errorf("GetGroup returned %d CIDs, want %d", len(group), len(allCIDs))
@@ -53,14 +51,12 @@ func TestRemoveGroup(t *testing.T) {
 	s.AddGroup(masterCID, allCIDs)
 	s.RemoveGroup(masterCID)
 
-	// После RemoveGroup ни один CID не должен быть в списке
 	for _, cid := range allCIDs {
 		if s.Has(cid) {
 			t.Errorf("Has(%q) = true after RemoveGroup, want false", cid)
 		}
 	}
 
-	// Группа тоже удалена
 	if s.GetGroup(masterCID) != nil {
 		t.Error("GetGroup should return nil after RemoveGroup")
 	}
@@ -70,22 +66,13 @@ func TestRemoveGroupPartialOverlap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test-store.json")
 	s, _ := NewUnpinStore(path)
 
-	// Группа 1
 	s.AddGroup("QmA", []string{"QmA", "QmB", "QmC"})
-	// Группа 2 с частичным пересечением
 	s.AddGroup("QmD", []string{"QmD", "QmB", "QmE"})
 
-	// Удаляем группу 2
 	s.RemoveGroup("QmD")
 
-	// QmB из группы 1 всё ещё в списке
 	if !s.Has("QmA") {
 		t.Error("QmA should still be in unpin list")
-	}
-	if !s.Has("QmB") {
-		t// QmB был в обеих группах, но RemoveGroup удалил его
-		// Это ожидаемое поведение — RemoveGroup удаляет все CID из группы
-		t.Log("QmB removed by RemoveGroup even though it was in group 1 too")
 	}
 }
 
@@ -103,8 +90,6 @@ func TestExpired(t *testing.T) {
 	s, _ := NewUnpinStore(path)
 
 	now := time.Now().UTC()
-
-	// Добавляем старую и новую записи
 	s.entries["QmOld"] = now.Add(-2 * time.Hour)
 	s.entries["QmNew"] = now.Add(-30 * time.Minute)
 	s.saveUnsafe()
@@ -118,13 +103,12 @@ func TestExpired(t *testing.T) {
 }
 
 func TestPersistence(t *testing.T) {
-	 dir := t.TempDir()
+	dir := t.TempDir()
 	path := filepath.Join(dir, "persist-store.json")
 
 	s1, _ := NewUnpinStore(path)
 	s1.AddGroup("QmMaster3", []string{"QmMaster3", "QmVid1"})
 
-	// Загружаем из того же файла
 	s2, _ := NewUnpinStore(path)
 
 	if !s2.Has("QmMaster3") {
@@ -143,7 +127,6 @@ func TestLegacyFormatLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "legacy-store.json")
 
-	// Пишем старый формат (массив Entry без groups)
 	legacy := `[{"cid":"QmLegacy1","unpinned_at":"2025-01-01T00:00:00Z"},{"cid":"QmLegacy2","unpinned_at":"2025-01-01T00:00:00Z"}]`
 	os.WriteFile(path, []byte(legacy), 0644)
 
@@ -158,7 +141,6 @@ func TestLegacyFormatLoad(t *testing.T) {
 	if !s.Has("QmLegacy2") {
 		t.Error("Legacy entry QmLegacy2 not loaded")
 	}
-	// Groups должен быть пустым, но не nil
 	if len(s.GetGroup("QmLegacy1")) != 0 {
 		t.Error("Legacy format should have no groups")
 	}

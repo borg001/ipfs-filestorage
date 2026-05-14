@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
@@ -13,6 +15,14 @@ import (
 // В продакшене реализуется *ipfs.Client, в тестах — mock.
 type IPFSAdder interface {
 	Add(ctx context.Context, filename string, r io.Reader) (*ipfs.AddResult, error)
+}
+
+// UploadResult — результат загрузки видео-чанков в IPFS.
+type UploadResult struct {
+	MasterCID   string            `json:"master_cid"`
+	VariantCIDs map[string]string `json:"variant_cids"`
+	SegmentCIDs map[string]string `json:"segment_cids"`
+	AllCIDs     []string          `json:"all_cids"`
 }
 
 // Uploader загружает сгенерированную HLS-структуру в IPFS.
@@ -73,7 +83,7 @@ func (u *Uploader) UploadDir(ctx context.Context, outputDir string) (*UploadResu
 		return nil, fmt.Errorf("no files found in output directory")
 	}
 
-	// Обновляем вариантные плейлисты
+	// Обновляем вариантные плейлисты (ссылки на чанки)
 	for relPath, cid := range fileCIDs {
 		if strings.HasSuffix(relPath, "playlist.m3u8") {
 			variantName := filepath.Dir(relPath)
@@ -115,6 +125,65 @@ func (u *Uploader) UploadDir(ctx context.Context, outputDir string) (*UploadResu
 	return result, nil
 }
 
+// rewriteVariantPlaylist читает вариантный плейлист и подставляет CID чанков вместо путей
+func (u *Uploader) rewriteVariantPlaylist(outputDir, relPath string, fileCIDs map[string]string) (string, error) {
+	fullPath := filepath.Join(outputDir, relPath)
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", err
+	}
+	content := string(data)
+	lines := strings.Split(content, "\n")
+
+	var result strings.Builder
+	variantDir := filepath.Dir(relPath)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "seg_") && strings.HasSuffix(trimmed, ".m4s") {
+			segRelPath := filepath.Join(variantDir, trimmed)
+			if cid, ok := fileCIDs[segRelPath]; ok {
+				result.WriteString(cid + ".m4s\n")
+				continue
+			}
+		}
+		result.WriteString(line + "\n")
+	}
+
+	return result.String(), nil
+}
+
+// buildMasterPlaylist генерирует мастер-плейлист с CID-ссылками
+func (u *Uploader) buildMasterPlaylist(variantCIDs map[string]string, fileCIDs map[string]string) (string, error) {
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n")
+
+	order := []string{"low", "medium", "high"}
+	bandwidth := map[string]int{
+		"low":    500000,
+		"medium": 1500000,
+		"high":   4000000,
+	}
+	resolution := map[string]string{
+		"low":    "426x760",
+		"medium": "720x1280",
+		"high":   "1080x1920",
+	}
+
+	for _, name := range order {
+		cid, ok := variantCIDs[name]
+		if !ok {
+			continue
+		}
+		bw := bandwidth[name]
+		res := resolution[name]
+		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%s,CODECS=\"avc1.42e01e\"\n", bw, res))
+		b.WriteString(fmt.Sprintf("/stream/segment/%s\n", cid))
+	}
+
+	return b.String(), nil
+}
+
 // reuploadContent загружает строку как файл в IPFS
 func (u *Uploader) reuploadContent(ctx context.Context, content, filename string) (string, error) {
 	reader := io.NopCloser(strings.NewReader(content))
@@ -123,4 +192,15 @@ func (u *Uploader) reuploadContent(ctx context.Context, content, filename string
 		return "", err
 	}
 	return result.CID, nil
+}
+
+// replaceInSlice заменяет элемент в слайсе
+func replaceInSlice(s []string, old, new string) []string {
+	for i, v := range s {
+		if v == old {
+			s[i] = new
+			break
+		}
+	}
+	return s
 }
