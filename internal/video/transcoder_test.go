@@ -188,10 +188,10 @@ func TestBuildHLSArgsSegmentFilenames(t *testing.T) {
 	argsStr := strings.Join(args, " ")
 
 	if !strings.Contains(argsStr, "low/seg_%d.m4s") {
-		t.Error("Missing low/seg_%d.m4s segment filename pattern")
+		t.Errorf("Missing low/seg_%%d.m4s segment filename pattern")
 	}
 	if !strings.Contains(argsStr, "medium/seg_%d.m4s") {
-		t.Error("Missing medium/seg_%d.m4s segment filename pattern")
+		t.Errorf("Missing medium/seg_%%d.m4s segment filename pattern")
 	}
 }
 
