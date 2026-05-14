@@ -80,7 +80,7 @@ func TestCluster_NoNodes(t *testing.T) {
 		t.Fatal("expected error for empty cluster")
 	}
 	if _, err := cm.ClusterStat(ctx, "cid"); err == nil {
-		t	t.Fatal("expected error for empty cluster")
+		t.Fatal("expected error for empty cluster")
 	}
 	if cm.ClusterIsPinnedAll(ctx, "cid") {
 		t.Fatal("expected false for empty cluster")

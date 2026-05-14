@@ -10,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
+	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 )
 
@@ -20,7 +22,6 @@ type mockCluster struct {
 	files    map[string][]byte
 	pinned   map[string]bool
 	nextCID  int
-	addErr   error
 }
 
 func newMockCluster() *mockCluster {
@@ -31,9 +32,6 @@ func newMockCluster() *mockCluster {
 }
 
 func (m *mockCluster) ClusterAdd(ctx context.Context, filename string, data io.Reader) (*ipfs.AddResult, error) {
-	if m.addErr != nil {
-		return nil, m.addErr
-	}
 	d, _ := io.ReadAll(data)
 	m.nextCID++
 	cID := fmt.Sprintf("QmTest%d", m.nextCID)
@@ -102,7 +100,7 @@ func TestHandleUpload_CountingReader(t *testing.T) {
 	cluster := newMockCluster()
 	h := setupHandlerWithMock(cfg, cluster)
 
-	// Загружаем файл 512 байт — меньше лимита
+	// Файл 512 байт — меньше лимита
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "test.txt")
@@ -139,7 +137,7 @@ func TestHandleUpload_CountingReader_TooLarge(t *testing.T) {
 	cluster := newMockCluster()
 	h := setupHandlerWithMock(cfg, cluster)
 
-	// Загружаем файл 2KB — больше лимита
+	// Файл 2KB — больше лимита
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "test.txt")
@@ -155,7 +153,7 @@ func TestHandleUpload_CountingReader_TooLarge(t *testing.T) {
 		t.Fatalf("Status = %d, want 413 for oversized file", w.Code)
 	}
 
-	// Проверяем что файл был анпиннут (cleanup после обнаружения превышения)
+	// Файл должен быть анпиннут (cleanup после обнаружения превышения)
 	if len(cluster.pinned) != 0 {
 		t.Errorf("File should have been unpinned after size check, pinned: %v", cluster.pinned)
 	}
@@ -175,11 +173,9 @@ func TestHandleUpload_FakeHeaderSize(t *testing.T) {
 	cluster := newMockCluster()
 	h := setupHandlerWithMock(cfg, cluster)
 
-	// Создаём multipart с header.Size = 10 (подделка), но реальный контент = 2KB
+	// Реальный контент = 2KB, но multipart-заголовок может врать
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	// CreateFormFile не позволяет подделать Size, поэтому просто проверяем,
-	// что сервер использует countingReader, а не header.Size
 	part, _ := writer.CreateFormFile("file", "test.txt")
 	part.Write(make([]byte, 2*1024))
 	writer.Close()
@@ -189,7 +185,7 @@ func TestHandleUpload_FakeHeaderSize(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleUpload(w, req)
 
-	// Файл 2KB > лимит 1KB → 413, несмотря на то что header.Size может быть другим
+	// Сервер использует countingReader, а не header.Size → 413
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("Status = %d, want 413 — server must verify actual bytes, not header", w.Code)
 	}

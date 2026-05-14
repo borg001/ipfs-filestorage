@@ -195,7 +195,7 @@ func (c *Client) URL() string {
 	return c.url
 }
 
-// parseCIDPath парсит CID строку в path.Path (для Pin/Unpin/IsPinned)
+// parsePath парсит CID строку в path.Path (для Pin/Unpin/IsPinned)
 func parsePath(cidStr string) (path.Path, error) {
 	p, err := path.NewPath("/ipfs/" + cidStr)
 	if err != nil {
