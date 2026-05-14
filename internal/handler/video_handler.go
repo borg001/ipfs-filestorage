@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,8 +81,8 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Загрузка в IPFS
-	uploader := video.NewUploader(h.cluster.LocalClient())
+	// Загрузка в IPFS — используем первую ноду кластера напрямую
+	uploader := video.NewUploader(h.getFirstClient())
 	uploadResult, err := uploader.UploadDir(ctx, outputDir)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "IPFS upload failed"})
@@ -108,6 +108,7 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleStreamMaster обрабатывает GET /stream/{cid}/master.m3u8.
+// Также может отдавать вариантные плейлисты по /stream/{cid}/playlist.m3u8
 func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 	// URL: /stream/{cid}/master.m3u8
 	path := r.URL.Path
@@ -134,15 +135,19 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	reader.WriteTo(w)
+	io.Copy(w, reader)
 }
 
 // HandleStreamSegment обрабатывает GET /stream/segment/{cid}.
+// Отдаёт HLS-чанки (.m4s) и вариантные плейлисты (.m3u8) по их CID.
 func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
-	// URL: /stream/segment/{cid} или /stream/segment/{cid}.m4s
 	path := strings.TrimPrefix(r.URL.Path, "/stream/segment/")
-	cid := strings.TrimSuffix(path, ".m4s")
-	cid = strings.TrimSuffix(path, ".m3u8")
+
+	// Убираем расширение — CID не содержит точек, но расширение добавлено для плееров
+	cid := path
+	if dotIdx := strings.LastIndex(path, "."); dotIdx > 0 {
+		cid = path[:dotIdx]
+	}
 
 	if cid == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CID required"})
@@ -162,7 +167,7 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	// Определяем Content-Type
+	// Определяем Content-Type по расширению
 	contentType := "video/mp4"
 	if strings.HasSuffix(path, ".m3u8") {
 		contentType = "application/vnd.apple.mpegurl"
@@ -171,20 +176,12 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.WriteHeader(http.StatusOK)
-	reader.WriteTo(w)
+	io.Copy(w, reader)
 }
 
-// WriteTo — хелпер для записи io.Reader в ResponseWriter
-// Нужен т.к. ClusterTryFetch возвращает io.ReadCloser, а не files.File
-func writeToResponse(w http.ResponseWriter, r interface{ Read([]byte) (int, error) }) {
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			w.Write(buf[:n])
-		}
-		if err != nil {
-			break
-		}
-	}
+// getFirstClient возвращает *ipfs.Client первой ноды кластера.
+// Нужен для video.Uploader, который работает напрямую с одной нодой.
+func (h *Handler) getFirstClient() *ipfsClient {
+	// Используем accessor из handler.go — доступ к внутренним полям
+	return h.cluster.(*clusterManager).nodes[0].Client
 }
