@@ -16,6 +16,7 @@ type Config struct {
 	Pinning PinningConfig
 	Unpin   UnpinConfig
 	CORS    CORSConfig
+	Video   VideoConfig
 }
 
 type ServerConfig struct {
@@ -40,8 +41,8 @@ type UploadConfig struct {
 }
 
 type PinningConfig struct {
-	Retries        int
-	RetryDelayMs   int
+	Retries      int
+	RetryDelayMs int
 }
 
 type UnpinConfig struct {
@@ -56,6 +57,26 @@ type UnpinConfig struct {
 type CORSConfig struct {
 	AllowedOrigins []string
 	AllowedHeaders []string
+}
+
+// VideoConfig — настройки видеопроцессинга и стриминга.
+type VideoConfig struct {
+	// Макс. длительность видео (сек)
+	MaxDurationSec int
+	// Макс. размер исходного файла (байт)
+	MaxSizeBytes int64
+	// Допустимое отклонение от пропорции 9:16
+	AspectRatioTolerance float64
+	// Длительность одного чанка (сек)
+	SegmentDurationSec int
+	// Список битрейтов для адаптивного стриминга (напр. ["500k","1500k","4000k"])
+	Bitrates []string
+	// Путь к бинарнику ffmpeg
+	FFmpegPath string
+	// Путь к бинарнику ffprobe
+	FFprobePath string
+	// Временная директория для обработки
+	TempDir string
 }
 
 // Load читает конфигурацию из переменных окружения.
@@ -73,7 +94,7 @@ func Load() *Config {
 		},
 		Upload: UploadConfig{
 			MaxFileSize:       getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
-			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "pdf", "doc", "docx", "zip", "json", "html"}),
+			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "pdf", "doc", "docx", "zip", "json", "html", "mp4", "mov", "webm", "avi"}),
 			AllowedMimeTypes: map[string]bool{
 				"image/png":               true,
 				"image/svg+xml":           true,
@@ -85,6 +106,10 @@ func Load() *Config {
 				"application/json":        true,
 				"application/octet-stream": true,
 				"text/html":               true,
+				"video/mp4":               true,
+				"video/quicktime":         true,
+				"video/webm":              true,
+				"video/x-msvideo":         true,
 			},
 		},
 		Pinning: PinningConfig{
@@ -101,6 +126,16 @@ func Load() *Config {
 			AllowedHeaders: getEnvSlice("CORS_ALLOWED_HEADERS", []string{
 				"Origin", "X-Requested-With", "Content-Type", "Accept", "X-API-Key",
 			}),
+		},
+		Video: VideoConfig{
+			MaxDurationSec:       getEnvInt("VIDEO_MAX_DURATION_SEC", 60),
+			MaxSizeBytes:         getEnvInt64("VIDEO_MAX_SIZE_MB", 30) * 1024 * 1024,
+			AspectRatioTolerance: getEnvFloat("VIDEO_ASPECT_RATIO_TOLERANCE", 0.1),
+			SegmentDurationSec:   getEnvInt("VIDEO_SEGMENT_DURATION_SEC", 4),
+			Bitrates:             getEnvSlice("VIDEO_BITRATES", []string{"500k", "1500k", "4000k"}),
+			FFmpegPath:           getEnv("FFMPEG_PATH", "ffmpeg"),
+			FFprobePath:          getEnv("FFPROBE_PATH", "ffprobe"),
+			TempDir:              getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
 		},
 	}
 }
@@ -163,4 +198,16 @@ func getEnvDuration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+func getEnvFloat(key string, def float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def
+	}
+	return f
 }
