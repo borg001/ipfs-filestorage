@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
@@ -14,14 +15,31 @@ import (
 
 // mockAdder реализует IPFSAdder для тестов
 type mockAdder struct {
+	mu        sync.Mutex
 	callCount int
+	errAfter  int    // вернуть ошибку после N вызовов (0 = никогда)
+	errMsg    string // текст ошибки
 }
 
 func (m *mockAdder) Add(ctx context.Context, filename string, r io.Reader) (*ipfs.AddResult, error) {
+	m.mu.Lock()
 	m.callCount++
+	cnt := m.callCount
+	m.mu.Unlock()
+
+	if m.errAfter > 0 && cnt > m.errAfter {
+		return nil, fmt.Errorf(m.errMsg)
+	}
+
 	data, _ := io.ReadAll(r)
-	cid := fmt.Sprintf("QmFile%d", m.callCount)
+	cid := fmt.Sprintf("QmFile%d", cnt)
 	return &ipfs.AddResult{CID: cid, Name: filename}, nil
+}
+
+func (m *mockAdder) getCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.callCount
 }
 
 func TestUploadDirEmpty(t *testing.T) {
@@ -82,8 +100,46 @@ func TestUploadDirWithFiles(t *testing.T) {
 	if len(result.SegmentCIDs) != 3 {
 		t.Errorf("Expected 3 segment CIDs, got %d", len(result.SegmentCIDs))
 	}
-	if adder.callCount < 7 {
-		t.Errorf("Expected at least 7 Add calls, got %d", adder.callCount)
+	if adder.getCallCount() < 7 {
+		t.Errorf("Expected at least 7 Add calls, got %d", adder.getCallCount())
+	}
+}
+
+func TestUploadDirOnlySegments(t *testing.T) {
+	outputDir := t.TempDir()
+	os.WriteFile(filepath.Join(outputDir, "seg_0.m4s"), []byte("segment-data"), 0644)
+	os.WriteFile(filepath.Join(outputDir, "seg_1.m4s"), []byte("segment-data-2"), 0644)
+
+	adder := &mockAdder{}
+	u := NewUploader(adder)
+	result, err := u.UploadDir(t.Context(), outputDir)
+	if err != nil {
+		t.Fatalf("UploadDir with only segments failed: %v", err)
+	}
+
+	if len(result.SegmentCIDs) != 2 {
+		t.Errorf("Expected 2 segment CIDs, got %d", len(result.SegmentCIDs))
+	}
+	// Master playlist should still be generated
+	if result.MasterCID == "" {
+		t.Error("MasterCID should not be empty even without variant playlists")
+	}
+}
+
+func TestUploadDirAdderError(t *testing.T) {
+	outputDir := t.TempDir()
+	lowDir := filepath.Join(outputDir, "low")
+	os.MkdirAll(lowDir, 0755)
+	os.WriteFile(filepath.Join(lowDir, "seg_0.m4s"), []byte("data"), 0644)
+
+	adder := &mockAdder{errAfter: 1, errMsg: "ipfs connection refused"}
+	u := NewUploader(adder)
+	_, err := u.UploadDir(t.Context(), outputDir)
+	if err == nil {
+		t.Error("Expected error when adder fails")
+	}
+	if !strings.Contains(err.Error(), "ipfs connection refused") {
+		t.Errorf("Error should contain original message, got: %v", err)
 	}
 }
 
@@ -114,6 +170,34 @@ func TestRewriteVariantPlaylistCIDSubstitution(t *testing.T) {
 	}
 	if strings.Contains(result, "seg_0.m4s\n") {
 		t.Error("Rewritten playlist should NOT contain original seg_0.m4s")
+	}
+}
+
+func TestRewriteVariantPlaylistMissingSegment(t *testing.T) {
+	outputDir := t.TempDir()
+	lowDir := filepath.Join(outputDir, "low")
+	os.MkdirAll(lowDir, 0755)
+
+	// Ссылка на seg_1.m4s, которого нет в fileCIDs — должна остаться как есть
+	playlist := "#EXTM3U\n#EXTINF:4.000,\nseg_0.m4s\n#EXTINF:4.000,\nseg_2.m4s\n#EXT-X-ENDLIST\n"
+	os.WriteFile(filepath.Join(lowDir, "playlist.m3u8"), []byte(playlist), 0644)
+
+	fileCIDs := map[string]string{
+		"low/seg_0.m4s": "QmSeg0",
+	}
+
+	u := NewUploader(nil)
+	result, err := u.rewriteVariantPlaylist(outputDir, "low/playlist.m3u8", fileCIDs)
+	if err != nil {
+		t.Fatalf("rewriteVariantPlaylist failed: %v", err)
+	}
+
+	if !strings.Contains(result, "QmSeg0.m4s") {
+		t.Error("Known segment should be replaced with CID")
+	}
+	// Неизвестный сегмент остаётся как есть
+	if !strings.Contains(result, "seg_2.m4s") {
+		t.Error("Unknown segment should remain as original filename")
 	}
 }
 
@@ -172,5 +256,37 @@ func TestBuildMasterPlaylistMissingVariant(t *testing.T) {
 	}
 	if !strings.Contains(content, "QmHigh") {
 		t.Error("Should contain high variant")
+	}
+}
+
+func TestReplaceInSlice(t *testing.T) {
+	s := []string{"a", "b", "c"}
+	result := replaceInSlice(s, "b", "x")
+	if result[1] != "x" {
+		t.Errorf("replaceInSlice: got %v, want x at index 1", result)
+	}
+	if len(result) != 3 {
+		t.Errorf("replaceInSlice: got len %d, want 3", len(result))
+	}
+
+	// Замена несуществующего элемента — ничего не меняется
+	result2 := replaceInSlice(s, "z", "y")
+	if len(result2) != 3 {
+		t.Errorf("replaceInSlice with missing: got len %d, want 3", len(result2))
+	}
+}
+
+func TestReplaceInSliceDedup(t *testing.T) {
+	// Проверяем что после rewrite AllCIDs обновляется корректно
+	s := []string{"QmA", "QmOld", "QmB"}
+	result := replaceInSlice(s, "QmOld", "QmNew")
+	found := false
+	for _, v := range result {
+		if v == "QmNew" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("QmNew should be present after replaceInSlice")
 	}
 }

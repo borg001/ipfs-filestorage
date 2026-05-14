@@ -30,6 +30,22 @@ func TestValidateFileSizeTooLarge(t *testing.T) {
 	}
 }
 
+func TestValidateFileSizeAtLimit(t *testing.T) {
+	cfg := &config.VideoConfig{
+		MaxSizeBytes:         10 * 1024 * 1024,
+		MaxDurationSec:       60,
+		AspectRatioTolerance: 0.1,
+	}
+	v := &Validator{cfg: cfg, prober: &mockProber{
+		info: &VideoInfo{Duration: 5, Width: 1080, Height: 1920},
+	}}
+
+	err := v.Validate(t.Context(), "/some/file.mp4", 10*1024*1024)
+	if err != nil {
+		t.Errorf("Expected no error at exact size limit, got: %v", err)
+	}
+}
+
 func TestValidateDurationTooLong(t *testing.T) {
 	cfg := &config.VideoConfig{
 		MaxSizeBytes:         100 * 1024 * 1024,
@@ -43,6 +59,22 @@ func TestValidateDurationTooLong(t *testing.T) {
 	err := v.Validate(t.Context(), "/some/file.mp4", 1024)
 	if err == nil {
 		t.Error("Expected error for video too long")
+	}
+}
+
+func TestValidateDurationAtLimit(t *testing.T) {
+	cfg := &config.VideoConfig{
+		MaxSizeBytes:         100 * 1024 * 1024,
+		MaxDurationSec:       30,
+		AspectRatioTolerance: 0.1,
+	}
+	v := &Validator{cfg: cfg, prober: &mockProber{
+		info: &VideoInfo{Duration: 30, Width: 1080, Height: 1920},
+	}}
+
+	err := v.Validate(t.Context(), "/some/file.mp4", 1024)
+	if err != nil {
+		t.Errorf("Expected no error at exact duration limit, got: %v", err)
 	}
 }
 
@@ -78,6 +110,38 @@ func TestValidateCorrectVertical9x16(t *testing.T) {
 	}
 }
 
+func TestValidateZeroDimensions(t *testing.T) {
+	cfg := &config.VideoConfig{
+		MaxSizeBytes:         100 * 1024 * 1024,
+		MaxDurationSec:       60,
+		AspectRatioTolerance: 0.1,
+	}
+	v := &Validator{cfg: cfg, prober: &mockProber{
+		info: &VideoInfo{Duration: 10, Width: 0, Height: 0},
+	}}
+
+	err := v.Validate(t.Context(), "/some/file.mp4", 1024)
+	if err != nil {
+		t.Errorf("Zero dimensions should skip aspect ratio check, got: %v", err)
+	}
+}
+
+func TestValidateZeroWidthOnly(t *testing.T) {
+	cfg := &config.VideoConfig{
+		MaxSizeBytes:         100 * 1024 * 1024,
+		MaxDurationSec:       60,
+		AspectRatioTolerance: 0.1,
+	}
+	v := &Validator{cfg: cfg, prober: &mockProber{
+		info: &VideoInfo{Duration: 10, Width: 0, Height: 1920},
+	}}
+
+	err := v.Validate(t.Context(), "/some/file.mp4", 1024)
+	if err != nil {
+		t.Errorf("Zero width should skip aspect ratio check, got: %v", err)
+	}
+}
+
 func TestValidateNear9x16(t *testing.T) {
 	cfg := &config.VideoConfig{
 		MaxSizeBytes:         100 * 1024 * 1024,
@@ -91,6 +155,23 @@ func TestValidateNear9x16(t *testing.T) {
 	err := v.Validate(t.Context(), "/some/file.mp4", 1024)
 	if err != nil {
 		t.Errorf("Expected no error for exact 9:16, got: %v", err)
+	}
+}
+
+func TestValidateSlightlyOutsideTolerance(t *testing.T) {
+	cfg := &config.VideoConfig{
+		MaxSizeBytes:         100 * 1024 * 1024,
+		MaxDurationSec:       60,
+		AspectRatioTolerance: 0.01, // very tight
+	}
+	// 720x1280 is exactly 9:16, but 720x1200 is 3:5 = 0.6, target = 0.5625
+	v := &Validator{cfg: cfg, prober: &mockProber{
+		info: &VideoInfo{Duration: 10, Width: 720, Height: 1200},
+	}}
+
+	err := v.Validate(t.Context(), "/some/file.mp4", 1024)
+	if err == nil {
+		t.Error("Expected error for aspect ratio outside tight tolerance")
 	}
 }
 
@@ -121,9 +202,24 @@ func TestWithProber(t *testing.T) {
 	}
 	v.WithProber(mock)
 
-	// Теперь Validate использует мок вместо ffprobe
 	err := v.Validate(t.Context(), "/fake/path.mp4", 1024)
 	if err != nil {
 		t.Errorf("Expected no error with mock prober, got: %v", err)
+	}
+}
+
+func TestValidateProbeReturnsError(t *testing.T) {
+	cfg := &config.VideoConfig{
+		MaxSizeBytes:         100 * 1024 * 1024,
+		MaxDurationSec:       60,
+		AspectRatioTolerance: 0.1,
+	}
+	v := &Validator{cfg: cfg, prober: &mockProber{
+		err: context.DeadlineExceeded,
+	}}
+
+	err := v.Validate(t.Context(), "/some/file.mp4", 1024)
+	if err == nil {
+		t.Error("Expected error when prober returns error")
 	}
 }

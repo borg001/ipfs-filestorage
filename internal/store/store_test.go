@@ -1,11 +1,95 @@
 package store
 
 import (
-	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestConcurrentAccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent-store.json")
+	s, err := NewUnpinStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	const goroutines = 50
+	const cidsPerGoroutine = 10
+
+	// Параллельные записи
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < cidsPerGoroutine; i++ {
+				cid := "QmGoroutine" + string(rune('A'+gid)) + "_" + string(rune('0'+i))
+				s.Add(cid)
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	all := s.All()
+	if len(all) != goroutines*cidsPerGoroutine {
+		t.Errorf("Expected %d entries after concurrent writes, got %d",
+				goroutines*cidsPerGoroutine, len(all))
+	}
+}
+
+func TestConcurrentAddAndHas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent-rw-store.json")
+	s, err := NewUnpinStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+
+	// Параллельные записи и чтения
+	for g := 0; g < 20; g++ {
+		wg.Add(2)
+		go func(gid int) {
+			defer wg.Done()
+			s.Add("QmCID" + string(rune('A'+gid)))
+		}(g)
+		go func(gid int) {
+			defer wg.Done()
+			s.Has("QmCID" + string(rune('A'+gid)))
+		}(g)
+	}
+	wg.Wait()
+}
+
+func TestConcurrentAddAndRemoveGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent-group-store.json")
+	s, err := NewUnpinStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+
+	// Параллельные AddGroup и RemoveGroup
+	for g := 0; g < 10; g++ {
+		master := "QmMaster" + string(rune('A'+g))
+		allCIDs := []string{master, master + "_v1", master + "_v2"}
+
+		wg.Add(2)
+		go func(m string, cids []string) {
+			defer wg.Done()
+			s.AddGroup(m, cids)
+		}(master, allCIDs)
+		go func(m string) {
+			defer wg.Done()
+			s.RemoveGroup(m)
+		}(master)
+	}
+	wg.Wait()
+
+	// Не должно паниковать — это главное
+}
 
 func TestAddGroup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test-store.json")
@@ -128,7 +212,9 @@ func TestLegacyFormatLoad(t *testing.T) {
 	path := filepath.Join(dir, "legacy-store.json")
 
 	legacy := `[{"cid":"QmLegacy1","unpinned_at":"2025-01-01T00:00:00Z"},{"cid":"QmLegacy2","unpinned_at":"2025-01-01T00:00:00Z"}]`
-	os.WriteFile(path, []byte(legacy), 0644)
+	filepath.Join(dir, "legacy-store.json")
+	_ = filepath.Join(dir, "legacy-store.json")
+	writeFile(t, path, legacy)
 
 	s, err := NewUnpinStore(path)
 	if err != nil {
@@ -146,6 +232,25 @@ func TestLegacyFormatLoad(t *testing.T) {
 	}
 }
 
+func TestSaveEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty-store.json")
+
+	s, _ := NewUnpinStore(path)
+	err := s.Save()
+	if err != nil {
+		t.Fatalf("Save on empty store failed: %v", err)
+	}
+
+	s2, _ := NewUnpinStore(path)
+	if len(s2.All()) != 0 {
+		t.Error("Empty store should have 0 entries after reload")
+	}
+	if len(s2.GetGroup("anything")) != 0 {
+		t.Error("Empty store should have 0 groups after reload")
+	}
+}
+
 func TestAll(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test-store.json")
 	s, _ := NewUnpinStore(path)
@@ -156,5 +261,12 @@ func TestAll(t *testing.T) {
 	all := s.All()
 	if len(all) != 2 {
 		t.Errorf("All() returned %d entries, want 2", len(all))
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 }
