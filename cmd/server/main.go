@@ -22,15 +22,18 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	// Read-only: model+
 	mux.HandleFunc("GET /file/", handlers.HandleFile)
 	mux.HandleFunc("GET /stream/", handlers.HandleStreamMaster)
 	mux.HandleFunc("GET /stream/segment/", handlers.HandleStreamSegment)
 
-	mux.HandleFunc("POST /upload", handlers.HandleUpload)
-	mux.HandleFunc("POST /upload-multiple", handlers.HandleUploadMultiple)
-	mux.HandleFunc("POST /upload-video", handlers.HandleUploadVideo)
+	// Upload: manager+
+	mux.HandleFunc("POST /upload", middleware.RequireRole("manager", "agency")(http.HandlerFunc(handlers.HandleUpload)).ServeHTTP)
+	mux.HandleFunc("POST /upload-multiple", middleware.RequireRole("manager", "agency")(http.HandlerFunc(handlers.HandleUploadMultiple)).ServeHTTP)
+	mux.HandleFunc("POST /upload-video", middleware.RequireRole("manager", "agency")(http.HandlerFunc(handlers.HandleUploadVideo)).ServeHTTP)
 
-	mux.HandleFunc("DELETE /file/", handlers.HandleDelete)
+	// Delete: agency+
+	mux.HandleFunc("DELETE /file/", middleware.RequireRole("agency")(http.HandlerFunc(handlers.HandleDelete)).ServeHTTP)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

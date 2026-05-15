@@ -81,6 +81,7 @@ func extractToken(r *http.Request) string {
 }
 
 // RequireRole проверяет, что роль пользователя входит в разрешённый список.
+// Роль "api-key" всегда проходит — это полный доступ через статический ключ.
 func RequireRole(roles ...string) func(http.Handler) http.Handler {
 	allowed := make(map[string]struct{}, len(roles))
 	for _, r := range roles {
@@ -92,6 +93,11 @@ func RequireRole(roles ...string) func(http.Handler) http.Handler {
 			role, _ := r.Context().Value(ContextKeyRole).(string)
 			if role == "" {
 				writeAuthError(w, http.StatusUnauthorized, "Not authenticated")
+				return
+			}
+			// api-key — полный доступ
+			if role == "api-key" {
+				next.ServeHTTP(w, r)
 				return
 			}
 			if _, ok := allowed[role]; !ok {

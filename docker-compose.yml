@@ -87,6 +87,8 @@ services:
       - IPFS_URL=http://ipfs1:5001
       - CLUSTER_NODES=${CLUSTER_NODES:-http://ipfs1:5001,http://ipfs2:5001}
       - UNPIN_STORE_PATH=/data/unpin-store.json
+      - AUTH_SERVICE_URL=http://auth-service:8080
+      - AUTH_CACHE_TTL_MIN=15
     volumes:
       - unpin-data-1:/data
     networks:
@@ -96,6 +98,8 @@ services:
         condition: service_healthy
       ipfs2:
         condition: service_healthy
+      auth-service:
+        condition: service_started
 
   # Storage API service 2
   storage2:
@@ -112,6 +116,8 @@ services:
       - IPFS_URL=http://ipfs2:5001
       - CLUSTER_NODES=${CLUSTER_NODES:-http://ipfs1:5001,http://ipfs2:5001}
       - UNPIN_STORE_PATH=/data/unpin-store.json
+      - AUTH_SERVICE_URL=http://auth-service:8080
+      - AUTH_CACHE_TTL_MIN=15
     volumes:
       - unpin-data-2:/data
     networks:
@@ -121,8 +127,23 @@ services:
         condition: service_healthy
       ipfs2:
         condition: service_healthy
+      auth-service:
+        condition: service_started
 
-  # Nginx load balancer (on port 8081 — 8080 occupied by MCP)
+  # Auth service (external dependency)
+  auth-service:
+    image: ghcr.io/darkrain/auth-service:latest
+    container_name: auth-service
+    ports:
+      - "8080:8080"
+    networks:
+      - storage-net
+    # Config is loaded from auth-service.json mounted or baked in image.
+    # If the image requires a config file, mount it:
+    # volumes:
+    #   - ./auth-service.json:/app/auth-service.json:ro
+
+  # Nginx load balancer (on port 8081 — 8080 occupied by auth-service)
   nginx:
     image: nginx:alpine
     container_name: nginx
