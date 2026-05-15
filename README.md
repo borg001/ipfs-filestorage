@@ -1,6 +1,6 @@
 # IPFS File Storage
 
-HTTP-сервис для децентрализованного хранения файлов поверх [IPFS](https://ipfs.tech/) (Kubo) с поддержкой кластерной репликации и мягким удалением.
+HTTP-сервис для децентрализованного хранения файлов поверх [IPFS](https://ipfs.tech/) (Kubo) с поддержкой кластерной репликации, адаптивного видео-стриминга и мягкого удаления.
 
 ## Архитектура
 
@@ -27,6 +27,7 @@ HTTP-сервис для децентрализованного хранения
                     │  │storage1  │      │  storage2   │         │
                     │  │ :3000    │      │  :3000      │         │
                     │  │ Go API   │      │  Go API    │         │
+                    │  │ +ffmpeg  │      │  +ffmpeg    │         │
                     │  └──────────┘      └────────────┘         │
                     │                                              │
                     └──────────────────────────────────────────────┘
@@ -35,8 +36,6 @@ HTTP-сервис для децентрализованного хранения
   nginx     → :8081   (балансировщик)
   storage1  → :3001   (API напрямую)
   storage2  → :3002   (API напрямую)
-  ipfs1     → :5001   (IPFS API)  :4001 (swarm)
-  ipfs2     → :5002   (IPFS API)  :4002 (swarm)
 ```
 
 ### Компоненты
@@ -46,8 +45,8 @@ HTTP-сервис для децентрализованного хранения
 | `ipfs-bootstrap` | `ipfs/kubo:latest` | Лёгкая нода для peer discovery. DHT-сервер, не хранит пользовательские данные |
 | `ipfs1` | `ipfs/kubo:latest` | Хранилище 1. Full DHT (Routing.Type=dht), хранит и раздаёт блоки |
 | `ipfs2` | `ipfs/kubo:latest` | Хранилище 2. Full DHT, хранит и раздаёт блоки |
-| `storage1` | Go (сборка из Dockerfile) | HTTP API, привязан к ipfs1 |
-| `storage2` | Go (сборка из Dockerfile) | HTTP API, привязан к ipfs2 |
+| `storage1` | Go + ffmpeg (сборка из Dockerfile) | HTTP API, привязан к ipfs1 |
+| `storage2` | Go + ffmpeg (сборка из Dockerfile) | HTTP API, привязан к ipfs2 |
 | `nginx` | `nginx:alpine` | Round-robin балансировщик на :8081 |
 
 ### Приватный swarm
@@ -75,15 +74,49 @@ POST /upload → storage1 → ipfs1.Add() → CID
 
 Каждый storage-сервис имеет свой отдельный Docker volume для unpin-store (`unpin-data-1`, `unpin-data-2`), чтобы избежать race condition при параллельной записи.
 
+### Видео-стриминг
+
+Загруженное видео проходит через ffmpeg и разбивается на HLS/CMAF-чанки с тремя уровнями качества:
+
+```
+POST /upload-video (video.mp4)
+  ├→ validate: ffprobe — размер, длительность ≤60с, пропорции 9:16
+  ├→ transcode: ffmpeg — 3 варианта (low/medium/high), fMP4 CMAF
+  ├→ upload: каждый чанк → IPFS → CID
+  ├→ rewrite: плейлисты переписываются — ссылки на CID
+  ├→ replicate: все CID реплицируются на все ноды
+  └→ AddGroup: masterCID → [all CIDs] для группового удаления
+```
+
+Клиент запрашивает мастер-плейлист, браузер автоматически выбирает качество по пропускной способности:
+
+```
+GET /stream/{masterCID}/master.m3u8
+  → #EXTM3U
+  → #EXT-X-STREAM-INF:BANDWIDTH=500000
+  → /stream/segment/QmLow.m3u8
+  → #EXT-X-STREAM-INF:BANDWIDTH=1500000
+  → /stream/segment/QmMed.m3u8
+  → #EXT-X-STREAM-INF:BANDWIDTH=4000000
+  → /stream/segment/QmHigh.m3u8
+```
+
+### Безопасность: верификация размера файла
+
+Сервис не доверяет `Content-Length` из HTTP-заголовка — реальный размер подсчитывается сервером через `countingReader` при чтении потока. После загрузки — дополнительная проверка через `ClusterStat()`, который запрашивает реальный размер из IPFS DAG. Если файл превышает лимит — он анпиннится и возвращается 413.
+
 ## Возможности
 
 - 📤 Загрузка одного файла — `POST /upload`
 - 📦 Массовая загрузка — `POST /upload-multiple`
+- 🎬 Видео-стриминг — `POST /upload-video` → адаптивный HLS (3 качества)
+- 📺 Воспроизведение — `GET /stream/{cid}/master.m3u8`
 - 📥 Скачивание по CID — `GET /file/{cid}`
 - 🗑 Мягкое удаление — `DELETE /file/{cid}` (unpin + TTL)
 - 🔄 Кластерная репликация — автоматический Fetch+Pin на все ноды
 - 🔐 API-Key аутентификация — заголовок `X-API-Key`
-- 🛡 Валидация файлов — расширение, MIME-тип, размер
+- 🛡 Валидация файлов — расширение, MIME-тип, размер (серверная верификация)
+- 🎥 Валидация видео — длительность, пропорции 9:16, размер
 - 🌍 CORS — настраиваемые origin и заголовки
 - ♻️ Фоновый GC — удаление истёкших файлов по TTL
 
@@ -124,9 +157,35 @@ curl -s http://localhost:3002/file/QmXyZ... \
 # 200 — репликация работает
 ```
 
+### Загрузка видео
+
+```bash
+# Загрузить вертикальное видео (9:16, до 30 МБ, до 60 сек)
+curl -s -X POST http://localhost:8081/upload-video \
+  -H "X-API-Key: SECRET_KEY_1" \
+  -F "file=@clip.mp4" | jq .
+
+# Ответ:
+# {
+#   "master_cid": "QmAbCd...",
+#   "variants": {
+#     "low": "QmLo1...",
+#     "medium": "QmLo2...",
+#     "high": "QmLo3..."
+#   },
+#   "all_cids": ["QmAbCd...", "QmLo1...", ...],
+#   "pinned": true
+# }
+
+# Воспроизвести в HLS-плеере (hls.js, VLC, ffplay)
+ffplay http://localhost:8081/stream/QmAbCd.../master.m3u8
+```
+
 ## Конфигурация
 
 Задаётся через `.env` файл (шаблон: `.env.example`).
+
+### Основные параметры
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
@@ -143,6 +202,19 @@ curl -s http://localhost:3002/file/QmXyZ... \
 | `UNPIN_STORE_PATH` | `/data/unpin-store.json` | Путь к файлу unpin-списка |
 | `CORS_ALLOWED_ORIGINS` | `*` | Разрешённые origins |
 | `CORS_ALLOWED_HEADERS` | `Origin,X-Requested-With,Content-Type,Accept,X-API-Key` | Разрешённые заголовки |
+
+### Параметры видео
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `VIDEO_MAX_DURATION_SEC` | `60` | Максимальная длительность видео (секунд) |
+| `VIDEO_MAX_SIZE_MB` | `30` | Максимальный размер видеофайла (МБ) |
+| `VIDEO_ASPECT_RATIO_TOLERANCE` | `0.1` | Допуск пропорций от 9:16 (0.1 = ±10%) |
+| `VIDEO_SEGMENT_DURATION_SEC` | `4` | Длительность HLS-сегмента (секунд) |
+| `VIDEO_BITRATES` | `500k,1500k,4000k` | Битрейты для low/medium/high вариантов |
+| `FFMPEG_PATH` | `ffmpeg` | Путь к бинарнику ffmpeg |
+| `FFPROBE_PATH` | `ffprobe` | Путь к бинарнику ffprobe |
+| `VIDEO_TEMP_DIR` | `/tmp/ipfs-video` | Директория для временных файлов транскодирования |
 
 ## API
 
@@ -168,6 +240,8 @@ X-API-Key: SECRET_KEY_1
 }
 ```
 
+Размер в ответе — реальный размер прочитанных сервером байтов, а не заголовок от клиента.
+
 ### Массовая загрузка
 
 ```http
@@ -179,6 +253,48 @@ X-API-Key: SECRET_KEY_1
 Поле формы: `file` (несколько файлов с одним именем поля)
 
 Ответ: массив объектов как при одиночной загрузке.
+
+### Загрузка видео
+
+```http
+POST /upload-video
+Content-Type: multipart/form-data
+X-API-Key: SECRET_KEY_1
+```
+
+Поле формы: `file` (mp4, webm, mov, avi, mkv, m4v)
+
+Ограничения: вертикальное видео (9:16 ±10%), до 30 МБ, до 60 сек.
+
+Ответ:
+```json
+{
+  "master_cid": "QmAbCd...",
+  "variants": {
+    "low": "QmLo1...",
+    "medium": "QmLo2...",
+    "high": "QmLo3..."
+  },
+  "all_cids": ["QmAbCd...", "QmLo1...", "QmLo2...", "QmLo3...", "..."],
+  "pinned": true
+}
+```
+
+### Стриминг видео
+
+```http
+GET /stream/{masterCID}/master.m3u8
+X-API-Key: SECRET_KEY_1
+```
+
+Возвращает мастер-плейлист HLS с тремя уровнями качества.
+
+```http
+GET /stream/segment/{cid}.m3u8
+GET /stream/segment/{cid}.m4s
+```
+
+Возвращает вариантный плейлист или чанк сегмента. Content-Type определяется по расширению.
 
 ### Скачивание файла
 
@@ -206,7 +322,27 @@ X-API-Key: SECRET_KEY_1
 }
 ```
 
-## Интеграционные тесты
+Для видео: удаление по `masterCID` удаляет все связанные чанки и плейлисты (групповое удаление через AddGroup/RemoveGroup).
+
+## Тесты
+
+### Юнит-тесты
+
+```bash
+go test ./internal/... -count=1 -v
+```
+
+Покрытие:
+
+| Пакет | Что тестируется |
+|---|---|
+| `internal/config` | Дефолты, env-override, невалидные значения, float-парсинг |
+| `internal/handler` | Upload (лимит, oversized, подделка размера), Video upload (no file, wrong ext, too large), Stream (master, segment, 404, deleted) |
+| `internal/ipfs` | Cluster Add/Replicate/Cat/Unpin, Stat (DAG size), countingReader |
+| `internal/store` | AddGroup/GetGroup/RemoveGroup, concurrent access (50 горутин), persistence, legacy format |
+| `internal/video` | Validator (size, duration, aspect ratio, probe error), Uploader (rewrite playlists, CID substitution, master playlist), Transcoder (HLS args, bitrate params, segment naming) |
+
+### Интеграционные тесты
 
 Тесты запускаются на хосте (нужен Go 1.22+) и работают с запущенным кластером через проброшенные порты.
 
@@ -219,8 +355,6 @@ docker compose up --build -d
 # Запуск тестов
 INTEGRATION=1 go test ./tests/integration/... -tags=integration -v -timeout 180s
 ```
-
-### Тесты
 
 | Тест | Что проверяет |
 |------|---------------|
@@ -241,7 +375,9 @@ INTEGRATION=1 go test ./tests/integration/... -tags=integration -v -timeout 180s
 cmd/server/          — точка входа, инициализация зависимостей
 internal/
   config/            — парсинг .env, дефолты
-  handler/           — HTTP-обработчики (upload, download, delete)
+  handler/
+    handler.go       — HTTP-обработчики (upload, download, delete)
+    video_handler.go — Видео: upload-video, stream, segment
   ipfs/
     client.go        — обёртка над Kubo HTTP API (Add, Cat, Pin, Unpin, Stat, Fetch)
     cluster.go       — ClusterManager: репликация, unpin, проверки
@@ -249,7 +385,11 @@ internal/
     helpers.go       — утилиты (dns4-префикс для multiaddr и пр.)
     named_reader.go  — io.Reader с именем файла
   middleware/         — APIKey auth, CORS, логирование
-  store/              — UnpinStore: файловый store + GC-воркер
+  store/              — UnpinStore: файловый store + GC-воркер + группы
+  video/
+    transcoder.go    — ffmpeg: транскодирование → HLS/CMAF (3 качества)
+    validator.go     — ffprobe: валидация (размер, длительность, 9:16)
+    uploader.go      — загрузка чанков в IPFS, переписывание плейлистов
 tests/
   integration/       — E2E тесты (требуют запущенный кластер)
 ```
@@ -264,6 +404,10 @@ Docker-сети используют DNS-имена контейнеров (на
 
 `/dns4/ipfs1/tcp/5001/p2p/12D3KooW...` вместо `/ip4/172.20.0.2/tcp/5001/p2p/...`
 
+### Групповое удаление видео
+
+При загрузке видео вызывается `AddGroup(masterCID, allCIDs)`. Это связывает мастер-плейлист со всеми чанками и вариантными плейлистами. При `DELETE /file/{masterCID}` вызывается `RemoveGroup()`, который анпиннит все связанные CID на всех нодах.
+
 ## Масштабирование
 
 Для добавления новой ноды:
@@ -271,8 +415,7 @@ Docker-сети используют DNS-имена контейнеров (на
 1. Добавить сервисы `ipfs3` и `storage3` в `docker-compose.yml`
 2. Добавить URL `http://ipfs3:5001` в `CLUSTER_NODES` в `.env`
 3. Добавить отдельный volume для unpin-store (`unpin-data-3`)
-4. Пробросить порты на хост при необходимости
-5. Пересобрать: `docker compose up --build -d`
+4. Пересобрать: `docker compose up --build -d`
 
 ## Лицензия
 
