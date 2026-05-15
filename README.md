@@ -28,14 +28,20 @@ HTTP-сервис для децентрализованного хранения
                     │  │ :3000    │      │  :3000      │         │
                     │  │ Go API   │      │  Go API    │         │
                     │  │ +ffmpeg  │      │  +ffmpeg    │         │
-                    │  └──────────┘      └────────────┘         │
+                    │  └────┬─────┘      └──────┬──────┘         │
+                    │       │ HTTP introspection  │                │
+                    │  ┌────▼─────────────────────▼──────┐      │
+                    │  │      auth-service :8080         │      │
+                    │  │   JWT + API keys, кеш           │      │
+                    │  └─────────────────────────────────┘      │
                     │                                              │
                     └──────────────────────────────────────────────┘
 
 Порты на хосте:
-  nginx     → :8081   (балансировщик)
-  storage1  → :3001   (API напрямую)
-  storage2  → :3002   (API напрямую)
+  auth-service → :8080   (аутентификация)
+  nginx        → :8081   (балансировщик)
+  storage1     → :3001   (API напрямую)
+  storage2     → :3002   (API напрямую)
 ```
 
 ### Компоненты
@@ -47,6 +53,7 @@ HTTP-сервис для децентрализованного хранения
 | `ipfs2` | `ipfs/kubo:latest` | Хранилище 2. Full DHT, хранит и раздаёт блоки |
 | `storage1` | Go + ffmpeg (сборка из Dockerfile) | HTTP API, привязан к ipfs1 |
 | `storage2` | Go + ffmpeg (сборка из Dockerfile) | HTTP API, привязан к ipfs2 |
+| `auth-service` | `ghcr.io/darkrain/auth-service:latest` | JWT-сессии + API-ключи |
 | `nginx` | `nginx:alpine` | Round-robin балансировщик на :8081 |
 
 ### Приватный swarm
@@ -64,6 +71,25 @@ POST /upload → storage1 → ipfs1.Add() → CID
 ```
 
 Ключевое: `Fetch()` вызывает `Cat()` и вычитывает весь поток. Это заставляет bitswap подтянуть ВСЕ блоки DAG с ноды-источника. После этого `Pin()` гарантирует, что данные физически на ноде. Без Fetch — Pin создаст маркер без реальных данных.
+
+### Аутентификация
+
+ipfs-filestorage интегрируется с auth-service через HTTP-интроспекцию. Каждый запрос проходит через `AuthMiddleware`:
+
+```
+1. Читаем заголовок Authorization: Bearer {token} или X-API-Key: {key}
+2. Нет заголовка → 401
+3. Проверяем локальный кеш (sync.Map + TTL 15 мин)
+   - Есть в кеше и не протух → пропускаем
+   - Нет в кеше → HTTP-вызов GET /auth/me в auth-service
+4. 200 → кешируем, пропускаем
+   401/403 → возвращаем ошибку
+   Сетевая ошибка → fallback на статические API_KEYS из env
+```
+
+Если сессия активна — доступ разрешён ко всем эндпоинтам. Отдельных ролей нет.
+
+Почему HTTP, а не shared Redis: формат ключей и схема сессий — внутренний контракт auth-service. Смена схемы → ipfs-filestorage ломается. HTTP-контракт стабильнее.
 
 ### Мягкое удаление
 
@@ -114,7 +140,7 @@ GET /stream/{masterCID}/master.m3u8
 - 📥 Скачивание по CID — `GET /file/{cid}`
 - 🗑 Мягкое удаление — `DELETE /file/{cid}` (unpin + TTL)
 - 🔄 Кластерная репликация — автоматический Fetch+Pin на все ноды
-- 🔐 API-Key аутентификация — заголовок `X-API-Key`
+- 🔐 Аутентификация — JWT (auth-service) + статические API-ключи
 - 🛡 Валидация файлов — расширение, MIME-тип, размер (серверная верификация)
 - 🎥 Валидация видео — длительность, пропорции 9:16, размер
 - 🌍 CORS — настраиваемые origin и заголовки
@@ -128,7 +154,7 @@ cd ipfs-filestorage
 
 # Конфигурация
 cp .env.example .env
-# nano .env  — поменяйте API_KEYS и параметры при необходимости
+# nano .env  — поменяйте API_KEYS, AUTH_SERVICE_URL и параметры при необходимости
 
 # Запуск
 docker compose up --build -d
@@ -146,14 +172,14 @@ docker ps --format "table {{.Names}}\t{{.Status}}"
 
 # Проверить репликацию — загрузить файл на storage1, скачать с storage2
 curl -s -X POST http://localhost:3001/upload \
-  -H "X-API-Key: SECRET_KEY_1" \
+  -H "Authorization: Bearer <jwt-token>" \
   -F "file=@test.json;type=application/json" | jq .
 
 # Ответ: {"cid":"QmXyZ...","name":"test.json","size":42,"pinned":true}
 
 # Прочитать тот же CID через storage2
 curl -s http://localhost:3002/file/QmXyZ... \
-  -H "X-API-Key: SECRET_KEY_1" -o /dev/null -w "%{http_code}"
+  -H "Authorization: Bearer <jwt-token>" -o /dev/null -w "%{http_code}"
 # 200 — репликация работает
 ```
 
@@ -162,7 +188,7 @@ curl -s http://localhost:3002/file/QmXyZ... \
 ```bash
 # Загрузить вертикальное видео (9:16, до 30 МБ, до 60 сек)
 curl -s -X POST http://localhost:8081/upload-video \
-  -H "X-API-Key: SECRET_KEY_1" \
+  -H "Authorization: Bearer <jwt-token>" \
   -F "file=@clip.mp4" | jq .
 
 # Ответ:
@@ -192,7 +218,7 @@ ffplay http://localhost:8081/stream/QmAbCd.../master.m3u8
 | `SERVER_PORT` | `3000` | Порт HTTP-сервера внутри контейнера |
 | `IPFS_URL` | `http://localhost:5001` | URL локальной IPFS-ноды (переопределяется в docker-compose) |
 | `CLUSTER_NODES` | `http://ipfs1:5001,http://ipfs2:5001` | Адреса всех нод кластера через запятую |
-| `API_KEYS` | `SECRET_KEY_1,SECRET_KEY_2` | API-ключи через запятую |
+| `API_KEYS` | `SECRET_KEY_1,SECRET_KEY_2` | Статические API-ключи (fallback при недоступности auth-service) |
 | `UPLOAD_MAX_FILE_SIZE` | `10485760` (10 МБ) | Максимальный размер файла |
 | `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,pdf,doc,docx,zip,json,html` | Разрешённые расширения |
 | `PINNING_RETRIES` | `3` | Попыток пиннинга при репликации |
@@ -201,7 +227,14 @@ ffplay http://localhost:8081/stream/QmAbCd.../master.m3u8
 | `UNPIN_GC_INTERVAL` | `1h` | Интервал проверки GC-воркера |
 | `UNPIN_STORE_PATH` | `/data/unpin-store.json` | Путь к файлу unpin-списка |
 | `CORS_ALLOWED_ORIGINS` | `*` | Разрешённые origins |
-| `CORS_ALLOWED_HEADERS` | `Origin,X-Requested-With,Content-Type,Accept,X-API-Key` | Разрешённые заголовки |
+| `CORS_ALLOWED_HEADERS` | `Origin,X-Requested-With,Content-Type,Accept,X-API-Key,Authorization` | Разрешённые заголовки |
+
+### Параметры аутентификации
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `AUTH_SERVICE_URL` | (пусто) | URL auth-service. Если пусто — только статические API-ключи |
+| `AUTH_CACHE_TTL_MIN` | `15` | TTL локального кеша авторизации (минут) |
 
 ### Параметры видео
 
@@ -218,14 +251,24 @@ ffplay http://localhost:8081/stream/QmAbCd.../master.m3u8
 
 ## API
 
-Все эндпоинты требуют заголовок `X-API-Key`.
+Все эндпоинты требуют аутентификацию — заголовок `Authorization: Bearer <token>` или `X-API-Key: <key>`.
+
+| Эндпоинт | Метод |
+|---|---|
+| `/file/{cid}` | GET |
+| `/stream/{cid}/master.m3u8` | GET |
+| `/stream/segment/{cid}` | GET |
+| `/upload` | POST |
+| `/upload-multiple` | POST |
+| `/upload-video` | POST |
+| `/file/{cid}` | DELETE |
 
 ### Загрузка файла
 
 ```http
 POST /upload
 Content-Type: multipart/form-data
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer <jwt-token>
 ```
 
 Поле формы: `file`
@@ -247,7 +290,7 @@ X-API-Key: SECRET_KEY_1
 ```http
 POST /upload-multiple
 Content-Type: multipart/form-data
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer <jwt-token>
 ```
 
 Поле формы: `file` (несколько файлов с одним именем поля)
@@ -259,7 +302,7 @@ X-API-Key: SECRET_KEY_1
 ```http
 POST /upload-video
 Content-Type: multipart/form-data
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer <jwt-token>
 ```
 
 Поле формы: `file` (mp4, webm, mov, avi, mkv, m4v)
@@ -284,7 +327,7 @@ X-API-Key: SECRET_KEY_1
 
 ```http
 GET /stream/{masterCID}/master.m3u8
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer <jwt-token>
 ```
 
 Возвращает мастер-плейлист HLS с тремя уровнями качества.
@@ -300,7 +343,7 @@ GET /stream/segment/{cid}.m4s
 
 ```http
 GET /file/{cid}
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer <jwt-token>
 ```
 
 Возвращает бинарное содержимое с корректным `Content-Type`.
@@ -309,7 +352,7 @@ X-API-Key: SECRET_KEY_1
 
 ```http
 DELETE /file/{cid}
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer <jwt-token>
 ```
 
 Файл немедленно помечается как удалённый. `GET /file/{cid}` возвращает `404`. Физическое удаление — после истечения `UNPIN_TTL`.
@@ -336,9 +379,11 @@ go test ./internal/... -count=1 -v
 
 | Пакет | Что тестируется |
 |---|---|
+| `internal/auth` | Validate (valid/invalid/forbidden), кеш (hit/expired), unreachable, timeout, invalidate |
 | `internal/config` | Дефолты, env-override, невалидные значения, float-парсинг |
 | `internal/handler` | Upload (лимит, oversized, подделка размера), Video upload (no file, wrong ext, too large), Stream (master, segment, 404, deleted) |
 | `internal/ipfs` | Cluster Add/Replicate/Cat/Unpin, Stat (DAG size), countingReader |
+| `internal/middleware` | Auth (no token, static key, Bearer, auth-service valid/unreachable/fallback), UserIDFromContext |
 | `internal/store` | AddGroup/GetGroup/RemoveGroup, concurrent access (50 горутин), persistence, legacy format |
 | `internal/video` | Validator (size, duration, aspect ratio, probe error), Uploader (rewrite playlists, CID substitution, master playlist), Transcoder (HLS args, bitrate params, segment naming) |
 
@@ -374,6 +419,9 @@ INTEGRATION=1 go test ./tests/integration/... -tags=integration -v -timeout 180s
 ```
 cmd/server/          — точка входа, инициализация зависимостей
 internal/
+  auth/
+    client.go        — HTTP-клиент к auth-service, локальный кеш (sync.Map + TTL)
+    errors.go        — ErrInvalidToken, ErrForbidden, ErrUnreachable
   config/            — парсинг .env, дефолты
   handler/
     handler.go       — HTTP-обработчики (upload, download, delete)
@@ -384,7 +432,9 @@ internal/
     clusterer.go     — интерфейс Clusterer (для mock в тестах)
     helpers.go       — утилиты (dns4-префикс для multiaddr и пр.)
     named_reader.go  — io.Reader с именем файла
-  middleware/         — APIKey auth, CORS, логирование
+  middleware/
+    auth.go          — AuthMiddleware (JWT + статические ключи)
+    middleware.go     — PanicRecovery, CORS, Chain
   store/              — UnpinStore: файловый store + GC-воркер + группы
   video/
     transcoder.go    — ffmpeg: транскодирование → HLS/CMAF (3 качества)
@@ -393,6 +443,10 @@ internal/
 tests/
   integration/       — E2E тесты (требуют запущенный кластер)
 ```
+
+### AuthMiddleware
+
+`AuthMiddleware` — единая точка аутентификации. Проверяет Bearer-токен через auth-service (с локальным кешем) или статические API-ключи из env. Если сессия активна — пропускает. При недоступности auth-service — автоматически fallback на статические ключи.
 
 ### Clusterer interface
 

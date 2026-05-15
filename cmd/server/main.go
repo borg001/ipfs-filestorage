@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/borg001/ipfs-filestorage/internal/auth"
 	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/handler"
 	"github.com/borg001/ipfs-filestorage/internal/middleware"
@@ -17,20 +18,20 @@ func main() {
 	cfg := config.Load()
 	handlers := handler.NewHandler(cfg)
 
+	authClient := auth.NewClient(&cfg.Auth)
+
 	mux := http.NewServeMux()
 
-	// File upload/download handlers
-	mux.HandleFunc("POST /upload", handlers.HandleUpload)
-	mux.HandleFunc("POST /upload-multiple", handlers.HandleUploadMultiple)
 	mux.HandleFunc("GET /file/", handlers.HandleFile)
-	mux.HandleFunc("DELETE /file/", handlers.HandleDelete)
-
-	// Video streaming handlers
-	mux.HandleFunc("POST /upload-video", handlers.HandleUploadVideo)
 	mux.HandleFunc("GET /stream/", handlers.HandleStreamMaster)
 	mux.HandleFunc("GET /stream/segment/", handlers.HandleStreamSegment)
 
-	// Default
+	mux.HandleFunc("POST /upload", handlers.HandleUpload)
+	mux.HandleFunc("POST /upload-multiple", handlers.HandleUploadMultiple)
+	mux.HandleFunc("POST /upload-video", handlers.HandleUploadVideo)
+
+	mux.HandleFunc("DELETE /file/", handlers.HandleDelete)
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, `{"error":"Not found"}`)
@@ -39,8 +40,8 @@ func main() {
 	wrapped := middleware.Chain(
 		mux,
 		middleware.PanicRecovery(),
-		middleware.APIKeyAuth(cfg.API.Keys),
 		middleware.CORS(cfg.CORS.AllowedOrigins, cfg.CORS.AllowedHeaders),
+		middleware.AuthMiddleware(authClient, cfg.API.Keys),
 	)
 
 	port := os.Getenv("SERVER_PORT")
@@ -48,7 +49,7 @@ func main() {
 		port = cfg.Server.Port
 	}
 
-	log.Printf("Server listening on :%s", port)
+	log.Printf("Server listening on :%s (auth=%s)", port, cfg.Auth.ServiceURL)
 	if err := http.ListenAndServe(":"+port, wrapped); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
