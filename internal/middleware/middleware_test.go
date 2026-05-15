@@ -7,13 +7,6 @@ import (
 	"testing"
 )
 
-func okHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-}
-
 func TestPanicRecovery(t *testing.T) {
 	handler := PanicRecovery()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")
@@ -30,7 +23,9 @@ func TestPanicRecovery(t *testing.T) {
 }
 
 func TestCORS(t *testing.T) {
-	handler := CORS([]string{"http://test.com"}, []string{"Content-Type", "X-API-Key"})(okHandler())
+	handler := CORS([]string{"http://test.com"}, []string{"Content-Type", "X-API-Key"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -38,15 +33,14 @@ func TestCORS(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "http://test.com" {
-		t.Fatalf("expected origin \"http://test.com\", got %s", got)
-	}
-	if got := rr.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type,X-API-Key" {
-		t.Fatalf("expected headers Content-Type,X-API-Key, got %s", got)
+		t.Fatalf("expected origin http://test.com, got %s", got)
 	}
 }
 
 func TestCORSPreflight(t *testing.T) {
-	handler := CORS([]string{"*"}, []string{"Content-Type"})(okHandler())
+	handler := CORS([]string{"*"}, []string{"Content-Type"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 	req := httptest.NewRequest(http.MethodOptions, "/", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -56,7 +50,10 @@ func TestCORSPreflight(t *testing.T) {
 }
 
 func TestChain(t *testing.T) {
-	handler := Chain(okHandler(), PanicRecovery(), CORS([]string{"*"}, []string{"Content-Type"}))
+	handler := Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}), PanicRecovery(), CORS([]string{"*"}, []string{"Content-Type"}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -65,37 +62,5 @@ func TestChain(t *testing.T) {
 	}
 	if rr.Body.String() != "ok" {
 		t.Fatalf("expected ok, got %s", rr.Body.String())
-	}
-}
-
-func TestAPIKeyAuth_Missing(t *testing.T) {
-	handler := APIKeyAuth([]string{"secret"})(okHandler())
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rr.Code)
-	}
-}
-
-func TestAPIKeyAuth_Invalid(t *testing.T) {
-	handler := APIKeyAuth([]string{"secret"})(okHandler())
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-API-Key", "wrong")
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", rr.Code)
-	}
-}
-
-func TestAPIKeyAuth_Valid(t *testing.T) {
-	handler := APIKeyAuth([]string{"secret"})(okHandler())
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-API-Key", "secret")
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 }

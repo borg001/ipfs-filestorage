@@ -10,8 +10,8 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/config"
 )
 
-func TestAuthMiddleware_NoToken(t *testing.T) {
-	h := AuthMiddleware(nil, []string{"secret"})(okHandler())
+func TestAuthMW_NoToken(t *testing.T) {
+	h := AuthMiddleware(nil, []string{"secret"})(roleEchoHandler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
@@ -20,8 +20,8 @@ func TestAuthMiddleware_NoToken(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_StaticKeyValid(t *testing.T) {
-	h := AuthMiddleware(nil, []string{"secret", "key2"})(okHandler())
+func TestAuthMW_StaticKeyValid(t *testing.T) {
+	h := AuthMiddleware(nil, []string{"secret", "key2"})(roleEchoHandler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-API-Key", "secret")
 	rr := httptest.NewRecorder()
@@ -34,8 +34,8 @@ func TestAuthMiddleware_StaticKeyValid(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_StaticKeyInvalid(t *testing.T) {
-	h := AuthMiddleware(nil, []string{"secret"})(okHandler())
+func TestAuthMW_StaticKeyInvalid(t *testing.T) {
+	h := AuthMiddleware(nil, []string{"secret"})(roleEchoHandler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-API-Key", "wrong")
 	rr := httptest.NewRecorder()
@@ -45,8 +45,8 @@ func TestAuthMiddleware_StaticKeyInvalid(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_BearerAsStaticKey(t *testing.T) {
-	h := AuthMiddleware(nil, []string{"mykey"})(okHandler())
+func TestAuthMW_BearerAsStaticKey(t *testing.T) {
+	h := AuthMiddleware(nil, []string{"mykey"})(roleEchoHandler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer mykey")
 	rr := httptest.NewRecorder()
@@ -56,7 +56,7 @@ func TestAuthMiddleware_BearerAsStaticKey(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_AuthServiceValid(t *testing.T) {
+func TestAuthMW_AuthServiceValid(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer jwt-token" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -71,7 +71,7 @@ func TestAuthMiddleware_AuthServiceValid(t *testing.T) {
 	cfg := &config.AuthConfig{ServiceURL: srv.URL, CacheTTLMin: 15}
 	authClient := auth.NewClient(cfg)
 
-	h := AuthMiddleware(authClient, []string{"fallback"})(okHandler())
+	h := AuthMiddleware(authClient, []string{"fallback"})(roleEchoHandler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer jwt-token")
 	rr := httptest.NewRecorder()
@@ -84,11 +84,11 @@ func TestAuthMiddleware_AuthServiceValid(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_AuthServiceUnreachable_Fallback(t *testing.T) {
+func TestAuthMW_AuthServiceUnreachable_Fallback(t *testing.T) {
 	cfg := &config.AuthConfig{ServiceURL: "http://127.0.0.1:1", CacheTTLMin: 15}
 	authClient := auth.NewClient(cfg)
 
-	h := AuthMiddleware(authClient, []string{"fallback-key"})(okHandler())
+	h := AuthMiddleware(authClient, []string{"fallback-key"})(roleEchoHandler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-API-Key", "fallback-key")
 	rr := httptest.NewRecorder()
@@ -98,11 +98,11 @@ func TestAuthMiddleware_AuthServiceUnreachable_Fallback(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_AuthServiceUnreachable_NoFallback(t *testing.T) {
+func TestAuthMW_AuthServiceUnreachable_NoFallback(t *testing.T) {
 	cfg := &config.AuthConfig{ServiceURL: "http://127.0.0.1:1", CacheTTLMin: 15}
 	authClient := auth.NewClient(cfg)
 
-	h := AuthMiddleware(authClient, []string{"fallback-key"})(okHandler())
+	h := AuthMiddleware(authClient, []string{"fallback-key"})(roleEchoHandler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-API-Key", "unknown")
 	rr := httptest.NewRecorder()
@@ -153,7 +153,7 @@ func TestRoleFromContext(t *testing.T) {
 	}
 }
 
-func okHandler() http.Handler {
+func roleEchoHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role := RoleFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
