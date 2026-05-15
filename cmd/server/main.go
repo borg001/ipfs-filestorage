@@ -19,11 +19,16 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Upload handlers
+	// File upload/download handlers
 	mux.HandleFunc("POST /upload", handlers.HandleUpload)
 	mux.HandleFunc("POST /upload-multiple", handlers.HandleUploadMultiple)
 	mux.HandleFunc("GET /file/", handlers.HandleFile)
 	mux.HandleFunc("DELETE /file/", handlers.HandleDelete)
+
+	// Video streaming handlers
+	mux.HandleFunc("POST /upload-video", handlers.HandleUploadVideo)
+	mux.HandleFunc("GET /stream/", handlers.HandleStreamMaster)
+	mux.HandleFunc("GET /stream/segment/", handlers.HandleStreamSegment)
 
 	// Default
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

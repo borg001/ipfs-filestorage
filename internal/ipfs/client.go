@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/ipfs/boxo/files"
+	"github.com/ipfs/boxo/path"
+	"github.com/ipfs/go-cid"
 	rpc "github.com/ipfs/kubo/client/rpc"
 	"github.com/ipfs/kubo/core/coreiface/options"
 	"github.com/multiformats/go-multiaddr"
@@ -130,20 +132,49 @@ func (c *Client) Fetch(ctx context.Context, cidStr string) error {
 	return nil
 }
 
-// Stat возвращает метаданные файла по CID
+// Stat возвращает метаданные файла по CID.
+// Использует Dag API вместо удалённого в Kubo v0.27 Object API.
+// Для UnixFS файлов считает cumulative size через links.
 func (c *Client) Stat(ctx context.Context, cidStr string) (*StatResult, error) {
-	p, err := parsePath(cidStr)
+	cID, err := cid.Parse(cidStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid CID %q: %w", cidStr, err)
 	}
-	stat, err := c.api.Object().Stat(ctx, p)
+
+	size, err := c.cumulativeSize(ctx, cID)
 	if err != nil {
 		return nil, fmt.Errorf("ipfs stat failed for %s: %w", cidStr, err)
 	}
+
 	return &StatResult{
 		CID:  cidStr,
-		Size: uint64(stat.CumulativeSize),
+		Size: size,
 	}, nil
+}
+
+// cumulativeSize считает размер файла в IPFS, обходя DAG.
+// Для листовых нод — размер самого блока.
+// Для нод со ссылками — сумма Size всех links (каждая link.Size уже
+// содержит cumulative size поддерева для UnixFS).
+func (c *Client) cumulativeSize(ctx context.Context, cID cid.Cid) (uint64, error) {
+	node, err := c.api.Dag().Get(ctx, cID)
+	if err != nil {
+		return 0, err
+	}
+
+	links := node.Links()
+	if len(links) == 0 {
+		// Листовая нода — размер = сериализованный размер блока
+		return node.Size()
+	}
+
+	// Для нод со ссылками: каждая link.Size уже содержит
+	// cumulative size поддерева (поведение UnixFS)
+	var total uint64
+	for _, link := range links {
+		total += link.Size
+	}
+	return total, nil
 }
 
 // IsPinned проверяет запиннен ли CID
@@ -162,4 +193,13 @@ func (c *Client) IsPinned(ctx context.Context, cidStr string) (bool, error) {
 // URL возвращает адрес ноды
 func (c *Client) URL() string {
 	return c.url
+}
+
+// parsePath парсит CID строку в path.Path (для Pin/Unpin/IsPinned)
+func parsePath(cidStr string) (path.Path, error) {
+	p, err := path.NewPath("/ipfs/" + cidStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CID %q: %w", cidStr, err)
+	}
+	return p, nil
 }

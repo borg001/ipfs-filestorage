@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-
-	"github.com/ipfs/boxo/path"
 )
 
 // httpURLToMultiaddr конвертирует http://host:port в multiaddr формат.
@@ -29,13 +27,4 @@ func httpURLToMultiaddr(rawURL string) string {
 
 	// Это DNS-имя (localhost, ipfs1, ipfs-bootstrap и т.д.)
 	return fmt.Sprintf("/dns4/%s/tcp/%s/http", host, port)
-}
-
-// parsePath парсит CID строку в path.Path
-func parsePath(cidStr string) (path.Path, error) {
-	p, err := path.NewPath("/ipfs/" + cidStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid CID %q: %w", cidStr, err)
-	}
-	return p, nil
 }
