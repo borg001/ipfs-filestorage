@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/borg001/ipfs-filestorage/internal/auth"
-	"github.com/borg001/ipfs-filestorage/internal/config"
 )
 
 type contextKey string
@@ -52,7 +51,6 @@ func AuthMiddleware(authClient *auth.Client, apiKeys []string) func(http.Handler
 					}
 					return
 				}
-				// auth-service недоступен — fallback ниже
 			}
 
 			// Fallback: статические API-ключи
