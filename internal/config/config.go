@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// Config holds all configuration for the service.
 type Config struct {
 	Server  ServerConfig
 	IPFS    IPFSConfig
@@ -17,6 +16,7 @@ type Config struct {
 	Unpin   UnpinConfig
 	CORS    CORSConfig
 	Video   VideoConfig
+	Auth    AuthConfig
 }
 
 type ServerConfig struct {
@@ -24,9 +24,7 @@ type ServerConfig struct {
 }
 
 type IPFSConfig struct {
-	// URL локальной IPFS-ноды (с которой работает этот инстанс)
-	LocalURL string
-	// URLs всех нод кластера (включая локальную) для репликации
+	LocalURL     string
 	ClusterNodes []string
 }
 
@@ -46,11 +44,8 @@ type PinningConfig struct {
 }
 
 type UnpinConfig struct {
-	// TTL после которого GC физически анпиннит файл из unpin-списка
 	TTL        time.Duration
-	// Интервал запуска GC-воркера
 	GCInterval time.Duration
-	// Путь к JSON-файлу для персистентности unpin-списка
 	StorePath  string
 }
 
@@ -59,27 +54,22 @@ type CORSConfig struct {
 	AllowedHeaders []string
 }
 
-// VideoConfig — настройки видеопроцессинга и стриминга.
 type VideoConfig struct {
-	// Макс. длительность видео (сек)
-	MaxDurationSec int
-	// Макс. размер исходного файла (байт)
-	MaxSizeBytes int64
-	// Допустимое отклонение от пропорции 9:16
+	MaxDurationSec       int
+	MaxSizeBytes         int64
 	AspectRatioTolerance float64
-	// Длительность одного чанка (сек)
-	SegmentDurationSec int
-	// Список битрейтов для адаптивного стриминга (напр. ["500k","1500k","4000k"])
-	Bitrates []string
-	// Путь к бинарнику ffmpeg
-	FFmpegPath string
-	// Путь к бинарнику ffprobe
-	FFprobePath string
-	// Временная директория для обработки
-	TempDir string
+	SegmentDurationSec   int
+	Bitrates             []string
+	FFmpegPath           string
+	FFprobePath          string
+	TempDir              string
 }
 
-// Load читает конфигурацию из переменных окружения.
+type AuthConfig struct {
+	ServiceURL  string
+	CacheTTLMin int
+}
+
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -124,7 +114,7 @@ func Load() *Config {
 		CORS: CORSConfig{
 			AllowedOrigins: getEnvSlice("CORS_ALLOWED_ORIGINS", []string{"*"}),
 			AllowedHeaders: getEnvSlice("CORS_ALLOWED_HEADERS", []string{
-				"Origin", "X-Requested-With", "Content-Type", "Accept", "X-API-Key",
+				"Origin", "X-Requested-With", "Content-Type", "Accept", "X-API-Key", "Authorization",
 			}),
 		},
 		Video: VideoConfig{
@@ -137,10 +127,12 @@ func Load() *Config {
 			FFprobePath:          getEnv("FFPROBE_PATH", "ffprobe"),
 			TempDir:              getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
 		},
+		Auth: AuthConfig{
+			ServiceURL:  getEnv("AUTH_SERVICE_URL", ""),
+			CacheTTLMin: getEnvInt("AUTH_CACHE_TTL_MIN", 15),
+		},
 	}
 }
-
-// --- helpers ---
 
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
