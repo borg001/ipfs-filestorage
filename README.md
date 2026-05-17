@@ -105,6 +105,73 @@ GET /stream/{masterCID}/master.m3u8
 
 Сервис не доверяет `Content-Length` из HTTP-заголовка — реальный размер подсчитывается сервером через `countingReader` при чтении потока. После загрузки — дополнительная проверка через `ClusterStat()`, который запрашивает реальный размер из IPFS DAG. Если файл превышает лимит — он анпиннится и возвращается 413.
 
+### Аутентификация
+
+Сервис поддерживает двухуровневую проверку подлинности:
+
+```
+Запрос → [1] Статические API-ключи (API_KEYS из env)
+           ├→ совпадение → 200
+           └→ нет
+         [2] Lua authorize(req) если AUTH_LUA_SCRIPT задан
+           ├→ true → 200
+           └→ false / ошибка / таймаут → 401
+```
+
+**Статические ключи** — всегда активны, не требуют внешних сервисов. Указываются в `API_KEYS` через запятую.
+
+**Lua-скрипт** — опциональный fallback для интеграции с любым auth-провайдером (JWT-сервис, OAuth, Keycloak и т.д.). Скрипт получает весь HTTP-реквест и возвращает `true` (доступ разрешён) или `false` (отказ).
+
+Пример — интеграция с auth-service:
+
+```lua
+local request = require("request")
+local json    = require("json")
+local env     = require("env")
+
+function authorize(req)
+  local token = req.headers["Authorization"]
+  if not token then return false end
+
+  local url = env.get("AUTH_SERVICE_URL")
+  if not url then return false end
+
+  local resp = request.get(url .. "/auth/me", {
+    headers = { Authorization = token }
+  })
+
+  if not resp or resp.status ~= 200 then return false end
+  local data = json.decode(resp.body)
+  return data.active == true
+end
+```
+
+#### Lua sandbox
+
+Скрипт выполняется в изолированной среде:
+
+• Доступны только безопасные стандартные библиотеки: `base`, `math`, `string`, `table`
+• Заблокированы: `io`, `os`, `file`, `debug`, `coroutine`
+• Таймаут выполнения — `AUTH_LUA_TIMEOUT_MS` (default 3000), при превышении VM прерывается
+
+#### Доступные Lua-библиотеки
+
+| Библиотека | Методы | Описание |
+|---|---|---|
+| `request` | `get(url, opts)`, `post(url, opts)`, `put(url, opts)`, `del(url, opts)` | HTTP-клиент с таймаутом. opts = {headers={}, body=""} |
+| `json` | `encode(table)`, `decode(string)` | JSON кодирование/декодирование |
+| `env` | `get("KEY")` | Только из белого списка (`AUTH_LUA_ENV_WHITELIST`) |
+
+#### Структура req в Lua
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `method` | string | HTTP метод |
+| `path` | string | Путь URL |
+| `headers` | table | Заголовки запроса (ключ → последнее значение) |
+| `query` | table | Query-параметры (ключ → последнее значение) |
+| `remote_addr` | string | IP:port клиента |
+
 ## Возможности
 
 - 📤 Загрузка одного файла — `POST /upload`
@@ -114,7 +181,7 @@ GET /stream/{masterCID}/master.m3u8
 - 📥 Скачивание по CID — `GET /file/{cid}`
 - 🗑 Мягкое удаление — `DELETE /file/{cid}` (unpin + TTL)
 - 🔄 Кластерная репликация — автоматический Fetch+Pin на все ноды
-- 🔐 API-Key аутентификация — заголовок `X-API-Key`
+- 🔐 Аутентификация — статические API-ключи + опциональный Lua-скрипт
 - 🛡 Валидация файлов — расширение, MIME-тип, размер (серверная верификация)
 - 🎥 Валидация видео — длительность, пропорции 9:16, размер
 - 🌍 CORS — настраиваемые origin и заголовки
@@ -181,6 +248,17 @@ curl -s -X POST http://localhost:8081/upload-video \
 ffplay http://localhost:8081/stream/QmAbCd.../master.m3u8
 ```
 
+### Подключение Lua-авторизации
+
+```bash
+# 1. Напишите скрипт (или используйте scripts/auth_example.lua)
+# 2. Укажите путь в .env:
+AUTH_LUA_SCRIPT=/app/scripts/auth_example.lua
+AUTH_LUA_ENV_WHITELIST=AUTH_SERVICE_URL
+# 3. Перезапустите сервис:
+docker compose up --build -d
+```
+
 ## Конфигурация
 
 Задаётся через `.env` файл (шаблон: `.env.example`).
@@ -192,7 +270,7 @@ ffplay http://localhost:8081/stream/QmAbCd.../master.m3u8
 | `SERVER_PORT` | `3000` | Порт HTTP-сервера внутри контейнера |
 | `IPFS_URL` | `http://localhost:5001` | URL локальной IPFS-ноды (переопределяется в docker-compose) |
 | `CLUSTER_NODES` | `http://ipfs1:5001,http://ipfs2:5001` | Адреса всех нод кластера через запятую |
-| `API_KEYS` | `SECRET_KEY_1,SECRET_KEY_2` | API-ключи через запятую |
+| `API_KEYS` | `SECRET_KEY_1,SECRET_KEY_2` | Статические API-ключи через запятую (всегда активны) |
 | `UPLOAD_MAX_FILE_SIZE` | `10485760` (10 МБ) | Максимальный размер файла |
 | `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,pdf,doc,docx,zip,json,html` | Разрешённые расширения |
 | `PINNING_RETRIES` | `3` | Попыток пиннинга при репликации |
@@ -201,7 +279,7 @@ ffplay http://localhost:8081/stream/QmAbCd.../master.m3u8
 | `UNPIN_GC_INTERVAL` | `1h` | Интервал проверки GC-воркера |
 | `UNPIN_STORE_PATH` | `/data/unpin-store.json` | Путь к файлу unpin-списка |
 | `CORS_ALLOWED_ORIGINS` | `*` | Разрешённые origins |
-| `CORS_ALLOWED_HEADERS` | `Origin,X-Requested-With,Content-Type,Accept,X-API-Key` | Разрешённые заголовки |
+| `CORS_ALLOWED_HEADERS` | `Origin,X-Requested-With,Content-Type,Accept,X-API-Key,Authorization` | Разрешённые заголовки |
 
 ### Параметры видео
 
@@ -214,18 +292,26 @@ ffplay http://localhost:8081/stream/QmAbCd.../master.m3u8
 | `VIDEO_BITRATES` | `500k,1500k,4000k` | Битрейты для low/medium/high вариантов |
 | `FFMPEG_PATH` | `ffmpeg` | Путь к бинарнику ffmpeg |
 | `FFPROBE_PATH` | `ffprobe` | Путь к бинарнику ffprobe |
-| `VIDEO_TEMP_DIR` | `/tmp/ipfs-video` | Директория для временных файлов транскодирования |
+| `VIDEO_TEMP_DIR` | `/tmp/video_processing` | Директория для временных файлов транскодирования |
+
+### Параметры Lua-авторизации
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `AUTH_LUA_SCRIPT` | _(пусто)_ | Путь к .lua файлу. Пусто = Lua отключён, только статические ключи |
+| `AUTH_LUA_TIMEOUT_MS` | `3000` | Таймаут выполнения скрипта (мс) |
+| `AUTH_LUA_ENV_WHITELIST` | `AUTH_SERVICE_URL` | Разрешённые env-переменные для `env.get()` через запятую |
 
 ## API
 
-Все эндпоинты требуют заголовок `X-API-Key`.
+Все эндпоинты требуют аутентификацию: заголовок `Authorization: Bearer <token>` или `X-API-Key: <key>`.
 
 ### Загрузка файла
 
 ```http
 POST /upload
 Content-Type: multipart/form-data
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer SECRET_KEY_1
 ```
 
 Поле формы: `file`
@@ -247,7 +333,7 @@ X-API-Key: SECRET_KEY_1
 ```http
 POST /upload-multiple
 Content-Type: multipart/form-data
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer SECRET_KEY_1
 ```
 
 Поле формы: `file` (несколько файлов с одним именем поля)
@@ -259,7 +345,7 @@ X-API-Key: SECRET_KEY_1
 ```http
 POST /upload-video
 Content-Type: multipart/form-data
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer SECRET_KEY_1
 ```
 
 Поле формы: `file` (mp4, webm, mov, avi, mkv, m4v)
@@ -284,7 +370,7 @@ X-API-Key: SECRET_KEY_1
 
 ```http
 GET /stream/{masterCID}/master.m3u8
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer SECRET_KEY_1
 ```
 
 Возвращает мастер-плейлист HLS с тремя уровнями качества.
@@ -300,7 +386,7 @@ GET /stream/segment/{cid}.m4s
 
 ```http
 GET /file/{cid}
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer SECRET_KEY_1
 ```
 
 Возвращает бинарное содержимое с корректным `Content-Type`.
@@ -309,7 +395,7 @@ X-API-Key: SECRET_KEY_1
 
 ```http
 DELETE /file/{cid}
-X-API-Key: SECRET_KEY_1
+Authorization: Bearer SECRET_KEY_1
 ```
 
 Файл немедленно помечается как удалённый. `GET /file/{cid}` возвращает `404`. Физическое удаление — после истечения `UNPIN_TTL`.
@@ -336,9 +422,12 @@ go test ./internal/... -count=1 -v
 
 | Пакет | Что тестируется |
 |---|---|
+| `internal/auth/lua` | Disabled, authorize true/false, no function, request fields, timeout, env whitelist/blocked, HTTP request, JSON, syntax error |
+| `internal/auth/static` | Valid key, bearer, no token, invalid key, empty keys |
 | `internal/config` | Дефолты, env-override, невалидные значения, float-парсинг |
 | `internal/handler` | Upload (лимит, oversized, подделка размера), Video upload (no file, wrong ext, too large), Stream (master, segment, 404, deleted) |
 | `internal/ipfs` | Cluster Add/Replicate/Cat/Unpin, Stat (DAG size), countingReader |
+| `internal/middleware` | PanicRecovery, CORS, Chain, Lua fallback, context |
 | `internal/store` | AddGroup/GetGroup/RemoveGroup, concurrent access (50 горутин), persistence, legacy format |
 | `internal/video` | Validator (size, duration, aspect ratio, probe error), Uploader (rewrite playlists, CID substitution, master playlist), Transcoder (HLS args, bitrate params, segment naming) |
 
@@ -374,6 +463,10 @@ INTEGRATION=1 go test ./tests/integration/... -tags=integration -v -timeout 180s
 ```
 cmd/server/          — точка входа, инициализация зависимостей
 internal/
+  auth/
+    provider.go      — интерфейс Provider + Result
+    static/          — статические API-ключи из env
+    lua/             — sandboxed Lua VM: request, json, env
   config/            — парсинг .env, дефолты
   handler/
     handler.go       — HTTP-обработчики (upload, download, delete)
@@ -384,7 +477,7 @@ internal/
     clusterer.go     — интерфейс Clusterer (для mock в тестах)
     helpers.go       — утилиты (dns4-префикс для multiaddr и пр.)
     named_reader.go  — io.Reader с именем файла
-  middleware/         — APIKey auth, CORS, логирование
+  middleware/         — Auth (static + Lua fallback), CORS, логирование
   store/              — UnpinStore: файловый store + GC-воркер + группы
   video/
     transcoder.go    — ffmpeg: транскодирование → HLS/CMAF (3 качества)
@@ -392,6 +485,8 @@ internal/
     uploader.go      — загрузка чанков в IPFS, переписывание плейлистов
 tests/
   integration/       — E2E тесты (требуют запущенный кластер)
+scripts/
+  auth_example.lua   — пример Lua-скрипта для интеграции с auth-service
 ```
 
 ### Clusterer interface
