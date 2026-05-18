@@ -8,8 +8,10 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-// registerRequestLib exposes `request.get(url, opts)` and `request.post(url, opts)`
-// inside the Lua VM. opts is a table with optional `headers` and `body` fields.
+// registerRequestLib exposes `request.get(url, opts)`, `request.post(url, opts)`,
+// `request.put(url, opts)`, `request.del(url, opts)` inside the Lua VM.
+// opts is a table with optional `headers` and `body` fields.
+// Modules are registered in package.loaded so require() works correctly.
 func (p *Provider) registerRequestLib(L *lua.LState) {
 	mod := L.NewTable()
 
@@ -65,6 +67,12 @@ func (p *Provider) registerRequestLib(L *lua.LState) {
 		return 1
 	}))
 
+	// Register in package.loaded so require("request") works without filesystem access
+	L.GetField(lua.RegistryIndex, "_LOADED")
+	L.SetField(L.Get(-1), "request", mod)
+	L.Pop(1)
+
+	// Also set as global for convenience
 	L.SetGlobal("request", mod)
 }
 
