@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -9,14 +10,16 @@ import (
 
 // Config holds all configuration for the service.
 type Config struct {
-	Server  ServerConfig
-	IPFS    IPFSConfig
-	API     APIConfig
-	Upload  UploadConfig
-	Pinning PinningConfig
-	Unpin   UnpinConfig
-	CORS    CORSConfig
-	Video   VideoConfig
+	Server   ServerConfig
+	IPFS     IPFSConfig
+	API      APIConfig
+	Upload   UploadConfig
+	Pinning  PinningConfig
+	Unpin    UnpinConfig
+	CORS     CORSConfig
+	Video    VideoConfig
+	Auth     AuthConfig
+	RateLimit RateLimitConfig
 }
 
 type ServerConfig struct {
@@ -79,8 +82,31 @@ type VideoConfig struct {
 	TempDir string
 }
 
+// AuthConfig — настройки аутентификации.
+type AuthConfig struct {
+	// LuaScript is the path to .lua file (empty = disabled).
+	LuaScript string
+	// LuaTimeoutMs is the max execution time in milliseconds.
+	LuaTimeoutMs int
+	// LuaEnvWhitelist is a comma-separated list of env var names accessible via env.get().
+	LuaEnvWhitelist string
+	// LuaMaxMemoryMB is the max VM memory in megabytes.
+	LuaMaxMemoryMB int
+}
+
+// RateLimitConfig — настройки rate limiting.
+type RateLimitConfig struct {
+	RPS   float64
+	Burst int
+}
+
 // Load читает конфигурацию из переменных окружения.
 func Load() *Config {
+	corsOrigins := getEnvSlice("CORS_ALLOWED_ORIGINS", []string{})
+	if len(corsOrigins) == 0 {
+		fmt.Fprintln(os.Stderr, "[WARN] CORS_ALLOWED_ORIGINS is empty — no CORS headers will be set. Set explicit origins for production.")
+	}
+
 	return &Config{
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "3000"),
@@ -122,7 +148,7 @@ func Load() *Config {
 			StorePath:  getEnv("UNPIN_STORE_PATH", "/data/unpin-store.json"),
 		},
 		CORS: CORSConfig{
-			AllowedOrigins: getEnvSlice("CORS_ALLOWED_ORIGINS", []string{"*"}),
+			AllowedOrigins: corsOrigins,
 			AllowedHeaders: getEnvSlice("CORS_ALLOWED_HEADERS", []string{
 				"Origin", "X-Requested-With", "Content-Type", "Accept", "X-API-Key",
 			}),
@@ -133,11 +159,30 @@ func Load() *Config {
 			AspectRatioTolerance: getEnvFloat("VIDEO_ASPECT_RATIO_TOLERANCE", 0.1),
 			SegmentDurationSec:   getEnvInt("VIDEO_SEGMENT_DURATION_SEC", 4),
 			Bitrates:             getEnvSlice("VIDEO_BITRATES", []string{"500k", "1500k", "4000k"}),
-			FFmpegPath:           getEnv("FFMPEG_PATH", "ffmpeg"),
-			FFprobePath:          getEnv("FFPROBE_PATH", "ffprobe"),
+			FFmpegPath:           validateBinaryName(getEnv("FFMPEG_PATH", "ffmpeg")),
+			FFprobePath:          validateBinaryName(getEnv("FFPROBE_PATH", "ffprobe")),
 			TempDir:              getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
 		},
+		Auth: AuthConfig{
+			LuaScript:      getEnv("AUTH_LUA_SCRIPT", ""),
+			LuaTimeoutMs:   getEnvInt("AUTH_LUA_TIMEOUT_MS", 3000),
+			LuaEnvWhitelist: getEnv("AUTH_LUA_ENV_WHITELIST", "AUTH_SERVICE_URL"),
+			LuaMaxMemoryMB: getEnvInt("AUTH_LUA_MAX_MEMORY_MB", 32),
+		},
+		RateLimit: RateLimitConfig{
+			RPS:   getEnvFloat("RATE_LIMIT_RPS", 10),
+			Burst: getEnvInt("RATE_LIMIT_BURST", 20),
+		},
 	}
+}
+
+// validateBinaryName ensures the path is just a binary name (no slashes, no path traversal).
+func validateBinaryName(path string) string {
+	if strings.Contains(path, "/") || strings.Contains(path, "..") {
+		fmt.Fprintf(os.Stderr, "[WARN] Invalid binary path %q — must be a bare name (e.g. 'ffmpeg'). Using default.\n", path)
+		return "ffmpeg"
+	}
+	return path
 }
 
 // --- helpers ---
