@@ -5,7 +5,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
+	"github.com/borg001/ipfs-filestorage/internal/auth/lua"
 	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/handler"
 	"github.com/borg001/ipfs-filestorage/internal/middleware"
@@ -16,6 +18,27 @@ func main() {
 
 	cfg := config.Load()
 	handlers := handler.NewHandler(cfg)
+
+	// Initialize Lua auth provider if configured
+	var luaProvider *lua.Provider
+	if cfg.Auth.LuaScript != "" {
+		envWhitelist := make(map[string]string)
+		for _, key := range strings.Split(cfg.Auth.LuaEnvWhitelist, ",") {
+			if k := strings.TrimSpace(key); k != "" {
+				envWhitelist[k] = os.Getenv(k)
+			}
+		}
+		luaProvider = lua.NewProvider(
+			cfg.Auth.LuaScript,
+			cfg.Auth.LuaTimeoutMs,
+			cfg.Auth.LuaMaxMemoryMB,
+			envWhitelist,
+		)
+		log.Printf("[AUTH] Lua script configured (timeout=%dms, maxMemory=%dMB)",
+			cfg.Auth.LuaTimeoutMs, cfg.Auth.LuaMaxMemoryMB)
+	} else {
+		log.Println("[AUTH] No Lua script configured — static API keys only")
+	}
 
 	mux := http.NewServeMux()
 
@@ -39,7 +62,12 @@ func main() {
 	wrapped := middleware.Chain(
 		mux,
 		middleware.PanicRecovery(),
-		middleware.APIKeyAuth(cfg.API.Keys),
+		middleware.SecurityHeaders(),
+		middleware.RateLimit(middleware.RateLimitConfig{
+			RPS:   cfg.RateLimit.RPS,
+			Burst: cfg.RateLimit.Burst,
+		}),
+		middleware.AuthMiddleware(cfg.API.Keys, luaProvider),
 		middleware.CORS(cfg.CORS.AllowedOrigins, cfg.CORS.AllowedHeaders),
 	)
 
