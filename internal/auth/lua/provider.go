@@ -3,68 +3,36 @@ package lua
 import (
 	"context"
 	"fmt"
-	"net"
+	"log"
 	"net/http"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
 
-const defaultMaxMemoryMB = 32
-
 // Provider executes a sandboxed Lua script to validate requests.
 // If no script is configured, Authorize always returns (false, nil).
 type Provider struct {
-	script         string
-	timeoutMs      int
-	maxMemoryBytes uint64
-	envWhitelist   map[string]string
-	httpClient     *http.Client
+	script       string
+	timeoutMs    int
+	envWhitelist map[string]string
+	httpClient   *http.Client
 }
 
 // NewProvider creates a new Lua auth provider.
 // script is the Lua source code; empty string means disabled.
 // timeoutMs is the max execution time in milliseconds (0 → 3000).
-// maxMemoryMB is the max VM memory in megabytes (0 → 32).
 // envWhitelist maps allowed env var names to their values.
-func NewProvider(script string, timeoutMs int, maxMemoryMB int, envWhitelist map[string]string) *Provider {
+func NewProvider(script string, timeoutMs int, envWhitelist map[string]string) *Provider {
 	if timeoutMs <= 0 {
 		timeoutMs = 3000
 	}
-	if maxMemoryMB <= 0 {
-		maxMemoryMB = defaultMaxMemoryMB
-	}
 	return &Provider{
-		script:         script,
-		timeoutMs:      timeoutMs,
-		maxMemoryBytes: uint64(maxMemoryMB) * 1024 * 1024,
-		envWhitelist:   envWhitelist,
+		script:       script,
+		timeoutMs:    timeoutMs,
+		envWhitelist: envWhitelist,
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutMs) * time.Millisecond,
-			// SSRF protection: custom transport with DNS resolve + private IP check
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					host, port, err := net.SplitHostPort(addr)
-					if err != nil {
-						return nil, fmt.Errorf("invalid address: %w", err)
-					}
-					// Resolve hostname
-					ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-					if err != nil {
-						return nil, fmt.Errorf("DNS lookup failed for %s: %w", host, err)
-					}
-					for _, ip := range ips {
-						if isPrivateIP(ip.IP) {
-							return nil, fmt.Errorf("access to private IP %s is blocked (SSRF protection)", ip.IP)
-						}
-					}
-					if len(ips) == 0 {
-						return nil, fmt.Errorf("no IP resolved for %s", host)
-					}
-					resolvedAddr := net.JoinHostPort(ips[0].IP.String(), port)
-					return net.DialContext(ctx, network, resolvedAddr)
-				},
-			},
 		},
 	}
 }
@@ -88,14 +56,9 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	defer cancel()
 
 	L := lua.NewState(lua.Options{
-		SkipOpenLibs:   true,
-		RegistrySize:   1024 * 20,
-		CallStackSize: 256,
+		SkipOpenLibs: true,
 	})
 	defer L.Close()
-
-	// Memory limit
-	L.SetMxMemory(p.maxMemoryBytes)
 
 	// VM will check context on every loop iteration and abort on cancel
 	L.SetContext(ctx)
@@ -115,17 +78,15 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 		L.Call(1, 0)
 	}
 
-	// Disable dangerous base functions: dofile, loadfile
-	for _, name := range []string{"dofile", "loadfile"} {
-		L.Push(L.NewFunction(func(L *lua.LState) int {
-			L.RaiseError("%s is disabled in sandbox", name)
-			return 0
-		}))
-		L.SetGlobal(name, L.Get(-1))
-		L.Pop(1)
-	}
+	// Override dangerous base functions with no-ops
+	L.SetGlobal("dofile", L.NewFunction(func(L *lua.LState) int { return 0 }))
+	L.SetGlobal("loadfile", L.NewFunction(func(L *lua.LState) int { return 0 }))
+	L.SetGlobal("load", L.NewFunction(func(L *lua.LState) int {
+		L.RaiseError("load() is disabled in sandbox")
+		return 0
+	}))
 
-	// Register sandboxed libraries in package.loaded so require() works
+	// Register sandboxed libraries
 	p.registerRequestLib(L)
 	registerJSONLib(L)
 	registerEnvLib(L, p.envWhitelist)
@@ -134,8 +95,15 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	reqTable := buildReqTable(L, r)
 	L.SetGlobal("req", reqTable)
 
+	// Register modules in package.loaded so require() works
+	loaded := L.GetField(L.Get(lua.RegistryIndex), "_LOADED")
+	L.SetField(loaded, "request", L.GetGlobal("request"))
+	L.SetField(loaded, "json", L.GetGlobal("json"))
+	L.SetField(loaded, "env", L.GetGlobal("env"))
+
 	// Execute the script (defines authorize function)
 	if err := L.DoString(p.script); err != nil {
+		log.Printf("[AUTH-LUA] Script parse error: %v", err)
 		return false, fmt.Errorf("lua script error: %w", err)
 	}
 
@@ -148,6 +116,7 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	L.Push(authFn)
 	L.Push(reqTable)
 	if err := L.PCall(1, 1, nil); err != nil {
+		log.Printf("[AUTH-LUA] authorize() execution error: %v", err)
 		return false, fmt.Errorf("lua authorize() error: %w", err)
 	}
 
@@ -187,28 +156,4 @@ func buildReqTable(L *lua.LState, r *http.Request) *lua.LTable {
 	L.SetField(req, "remote_addr", lua.LString(r.RemoteAddr))
 
 	return req
-}
-
-// isPrivateIP checks if an IP address is in a private/reserved range (SSRF protection)
-func isPrivateIP(ip net.IP) bool {
-	privateCIDRs := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"169.254.0.0/16",
-		"127.0.0.0/8",
-		"0.0.0.0/8",
-		"::1/128",
-		"fc00::/7",
-		"fe80::/10",
-	}
-
-	for _, cidr := range privateCIDRs {
-		_, pr, _ := net.ParseCIDR(cidr)
-		if pr.Contains(ip) {
-			return true
-		}
-	}
-
-	return false
 }
