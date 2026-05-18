@@ -8,7 +8,7 @@ import (
 )
 
 func TestProvider_Disabled(t *testing.T) {
-	p := NewProvider("", 0, nil)
+	p := NewProvider("", 0, 0, nil)
 	if p.Enabled() {
 		t.Fatal("should be disabled with empty script")
 	}
@@ -24,7 +24,7 @@ function authorize(req)
   return req.headers["X-Allow"] == "yes"
 end
 `
-	p := NewProvider(script, 3000, nil)
+	p := NewProvider(script, 3000, 0, nil)
 
 	r := httptest.NewRequest("GET", "/test", nil)
 	r.Header.Set("X-Allow", "yes")
@@ -43,7 +43,7 @@ function authorize(req)
   return false
 end
 `
-	p := NewProvider(script, 3000, nil)
+	p := NewProvider(script, 3000, 0, nil)
 
 	r := httptest.NewRequest("GET", "/", nil)
 	ok, err := p.Authorize(context.Background(), r)
@@ -57,7 +57,7 @@ end
 
 func TestProvider_NoAuthorizeFunction(t *testing.T) {
 	script := `x = 1`
-	p := NewProvider(script, 3000, nil)
+	p := NewProvider(script, 3000, 0, nil)
 
 	r := httptest.NewRequest("GET", "/", nil)
 	_, err := p.Authorize(context.Background(), r)
@@ -75,7 +75,7 @@ function authorize(req)
   return true
 end
 `
-	p := NewProvider(script, 3000, nil)
+	p := NewProvider(script, 3000, 0, nil)
 
 	r := httptest.NewRequest("POST", "/upload?token=abc", nil)
 	ok, err := p.Authorize(context.Background(), r)
@@ -95,12 +95,31 @@ function authorize(req)
   return true
 end
 `
-	p := NewProvider(script, 100, nil)
+	p := NewProvider(script, 100, 0, nil)
 
 	r := httptest.NewRequest("GET", "/", nil)
 	_, err := p.Authorize(context.Background(), r)
 	if err == nil {
 		t.Fatal("expected timeout error")
+	}
+}
+
+func TestProvider_MemoryLimit(t *testing.T) {
+	script := `
+function authorize(req)
+  local t = {}
+  for i = 1, 10000000 do
+    t[i] = string.rep("x", 100)
+  end
+  return true
+end
+`
+	p := NewProvider(script, 5000, 1, nil) // 1MB limit
+
+	r := httptest.NewRequest("GET", "/", nil)
+	_, err := p.Authorize(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected memory limit error")
 	}
 }
 
@@ -111,7 +130,7 @@ function authorize(req)
   return url == "http://auth:8080"
 end
 `
-	p := NewProvider(script, 3000, map[string]string{
+	p := NewProvider(script, 3000, 0, map[string]string{
 		"AUTH_SERVICE_URL": "http://auth:8080",
 	})
 
@@ -132,7 +151,7 @@ function authorize(req)
   return path ~= nil
 end
 `
-	p := NewProvider(script, 3000, map[string]string{})
+	p := NewProvider(script, 3000, 0, map[string]string{})
 
 	r := httptest.NewRequest("GET", "/", nil)
 	ok, err := p.Authorize(context.Background(), r)
@@ -141,6 +160,54 @@ end
 	}
 	if ok {
 		t.Fatal("env.PATH should be blocked, expected false")
+	}
+}
+
+func TestProvider_DofileBlocked(t *testing.T) {
+	script := `
+function authorize(req)
+  dofile("/etc/passwd")
+  return true
+end
+`
+	p := NewProvider(script, 3000, 0, nil)
+
+	r := httptest.NewRequest("GET", "/", nil)
+	_, err := p.Authorize(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected error when dofile is called")
+	}
+}
+
+func TestProvider_LoadfileBlocked(t *testing.T) {
+	script := `
+function authorize(req)
+  loadfile("/etc/passwd")
+  return true
+end
+`
+	p := NewProvider(script, 3000, 0, nil)
+
+	r := httptest.NewRequest("GET", "/", nil)
+	_, err := p.Authorize(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected error when loadfile is called")
+	}
+}
+
+func TestProvider_SSRFProtection(t *testing.T) {
+	script := `
+function authorize(req)
+  local resp = request.get("http://127.0.0.1:5001/api/v0/id")
+  return false
+end
+`
+	p := NewProvider(script, 3000, 0, nil)
+
+	r := httptest.NewRequest("GET", "/", nil)
+	_, err := p.Authorize(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected SSRF error for private IP")
 	}
 }
 
@@ -157,6 +224,7 @@ func TestProvider_RequestHTTP(t *testing.T) {
 	}))
 	defer authServer.Close()
 
+	// Extract host and port from test server URL for the whitelist
 	script := `
 function authorize(req)
   local token = req.headers["Authorization"]
@@ -171,7 +239,7 @@ function authorize(req)
   return data.active == true
 end
 `
-	p := NewProvider(script, 5000, map[string]string{
+	p := NewProvider(script, 5000, 0, map[string]string{
 		"AUTH_URL": authServer.URL,
 	})
 
@@ -205,7 +273,7 @@ function authorize(req)
   return data.active == true and data.role == "admin"
 end
 `
-	p := NewProvider(script, 3000, nil)
+	p := NewProvider(script, 3000, 0, nil)
 
 	r := httptest.NewRequest("GET", "/", nil)
 	ok, err := p.Authorize(context.Background(), r)
@@ -219,7 +287,7 @@ end
 
 func TestProvider_SyntaxError(t *testing.T) {
 	script := `function authorize(req) return end`
-	p := NewProvider(script, 3000, nil)
+	p := NewProvider(script, 3000, 0, nil)
 
 	r := httptest.NewRequest("GET", "/", nil)
 	_, err := p.Authorize(context.Background(), r)
