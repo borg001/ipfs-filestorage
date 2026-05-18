@@ -3,6 +3,7 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -23,7 +24,7 @@ func PanicRecovery() Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					fmt.Fprintf(stderr(), "[PANIC] %s %s: %v\n", r.Method, r.URL.Path, rec)
+					fmt.Fprintf(os.Stderr, "[PANIC] %s %s: %v\n", r.Method, r.URL.Path, rec)
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusInternalServerError)
 					w.Write([]byte(`{"error":"internal server error"}`))
@@ -32,10 +33,6 @@ func PanicRecovery() Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-func stderr() fmt.FileWriter {
-	return os().Stderr
 }
 
 // CORS sets configurable CORS headers and handles OPTIONS pre-flight.
@@ -59,15 +56,6 @@ func CORS(allowedOrigins []string, allowedHeaders []string) Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// os interface for testability
-type osInterface struct {
-	Stderr fmt.FileWriter
-}
-
-func os() *osInterface {
-	return &osInterface{Stderr: fmt.Stderr}
 }
 
 // APIKeyAuth is the legacy static-only middleware (kept for backwards compatibility).
