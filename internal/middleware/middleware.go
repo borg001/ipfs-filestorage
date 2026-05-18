@@ -3,7 +3,6 @@ package middleware
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 )
 
@@ -24,7 +23,7 @@ func PanicRecovery() Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					fmt.Fprintf(os.Stderr, "[PANIC] %s %s: %v\n", r.Method, r.URL.Path, rec)
+					fmt.Fprintf(stderr(), "[PANIC] %s %s: %v\n", r.Method, r.URL.Path, rec)
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusInternalServerError)
 					w.Write([]byte(`{"error":"internal server error"}`))
@@ -35,15 +34,23 @@ func PanicRecovery() Middleware {
 	}
 }
 
+func stderr() fmt.FileWriter {
+	return os().Stderr
+}
+
 // CORS sets configurable CORS headers and handles OPTIONS pre-flight.
+// If allowedOrigins is empty, no CORS headers are set (production-safe default).
 func CORS(allowedOrigins []string, allowedHeaders []string) Middleware {
-	originStr := strings.Join(allowedOrigins, ",")
-	headerStr := strings.Join(allowedHeaders, ",")
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", originStr)
-			w.Header().Set("Access-Control-Allow-Headers", headerStr)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			if len(allowedOrigins) > 0 {
+				originStr := strings.Join(allowedOrigins, ",")
+				headerStr := strings.Join(allowedHeaders, ",")
+				w.Header().Set("Access-Control-Allow-Origin", originStr)
+				w.Header().Set("Access-Control-Allow-Headers", headerStr)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			}
+
 			if r.Method == http.MethodOptions {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusNoContent)
@@ -52,4 +59,18 @@ func CORS(allowedOrigins []string, allowedHeaders []string) Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// os interface for testability
+type osInterface struct {
+	Stderr fmt.FileWriter
+}
+
+func os() *osInterface {
+	return &osInterface{Stderr: fmt.Stderr}
+}
+
+// APIKeyAuth is the legacy static-only middleware (kept for backwards compatibility).
+func APIKeyAuth(apiKeys []string) Middleware {
+	return AuthMiddleware(apiKeys, nil)
 }
