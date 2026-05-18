@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
@@ -41,7 +42,9 @@ func AuthMiddleware(apiKeys []string, luaProvider *lua.Provider) func(http.Handl
 			if luaProvider != nil && luaProvider.Enabled() {
 				ok, err := luaProvider.Authorize(r.Context(), r)
 				if err != nil {
-					writeAuthError(w, "Auth error: "+err.Error())
+					// Log details server-side only, return generic message to client
+					log.Printf("[AUTH] Lua error: %v", err)
+					writeAuthError(w, "Authentication failed")
 					return
 				}
 				if ok {
