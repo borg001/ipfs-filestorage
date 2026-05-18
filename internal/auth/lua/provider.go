@@ -3,6 +3,7 @@ package lua
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -54,7 +55,9 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	L := lua.NewState(lua.Options{SkipOpenLibs: true})
+	L := lua.NewState(lua.Options{
+		SkipOpenLibs: true,
+	})
 	defer L.Close()
 
 	// VM will check context on every loop iteration and abort on cancel
@@ -75,6 +78,14 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 		L.Call(1, 0)
 	}
 
+	// Override dangerous base functions with no-ops
+	L.SetGlobal("dofile", L.NewFunction(func(L *lua.LState) int { return 0 }))
+	L.SetGlobal("loadfile", L.NewFunction(func(L *lua.LState) int { return 0 }))
+	L.SetGlobal("load", L.NewFunction(func(L *lua.LState) int {
+		L.RaiseError("load() is disabled in sandbox")
+		return 0
+	}))
+
 	// Register sandboxed libraries
 	p.registerRequestLib(L)
 	registerJSONLib(L)
@@ -84,8 +95,15 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	reqTable := buildReqTable(L, r)
 	L.SetGlobal("req", reqTable)
 
+	// Register modules in package.loaded so require() works
+	loaded := L.GetField(L.Get(lua.RegistryIndex), "_LOADED")
+	L.SetField(loaded, "request", L.GetGlobal("request"))
+	L.SetField(loaded, "json", L.GetGlobal("json"))
+	L.SetField(loaded, "env", L.GetGlobal("env"))
+
 	// Execute the script (defines authorize function)
 	if err := L.DoString(p.script); err != nil {
+		log.Printf("[AUTH-LUA] Script parse error: %v", err)
 		return false, fmt.Errorf("lua script error: %w", err)
 	}
 
@@ -98,6 +116,7 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	L.Push(authFn)
 	L.Push(reqTable)
 	if err := L.PCall(1, 1, nil); err != nil {
+		log.Printf("[AUTH-LUA] authorize() execution error: %v", err)
 		return false, fmt.Errorf("lua authorize() error: %w", err)
 	}
 

@@ -36,14 +36,18 @@ func PanicRecovery() Middleware {
 }
 
 // CORS sets configurable CORS headers and handles OPTIONS pre-flight.
+// If allowedOrigins is empty, no CORS headers are set (production-safe default).
 func CORS(allowedOrigins []string, allowedHeaders []string) Middleware {
-	originStr := strings.Join(allowedOrigins, ",")
-	headerStr := strings.Join(allowedHeaders, ",")
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", originStr)
-			w.Header().Set("Access-Control-Allow-Headers", headerStr)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			if len(allowedOrigins) > 0 {
+				originStr := strings.Join(allowedOrigins, ",")
+				headerStr := strings.Join(allowedHeaders, ",")
+				w.Header().Set("Access-Control-Allow-Origin", originStr)
+				w.Header().Set("Access-Control-Allow-Headers", headerStr)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			}
+
 			if r.Method == http.MethodOptions {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusNoContent)
@@ -52,4 +56,9 @@ func CORS(allowedOrigins []string, allowedHeaders []string) Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// APIKeyAuth is the legacy static-only middleware (kept for backwards compatibility).
+func APIKeyAuth(apiKeys []string) Middleware {
+	return AuthMiddleware(apiKeys, nil)
 }

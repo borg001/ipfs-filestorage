@@ -52,7 +52,13 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Сохраняем во временный файл
+	// Проверяем свободное место на диске (3x от максимального размера)
+	if err := checkDiskSpace(h.cfg.Video.TempDir, h.cfg.Video.MaxSizeBytes*3); err != nil {
+		writeJSON(w, http.StatusInsufficientStorage, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Сохраняем во временный файл с серверной проверкой размера
 	tmpInput, err := os.CreateTemp(h.cfg.Video.TempDir, "video-input-*.mp4")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Temp file creation failed"})
@@ -61,16 +67,27 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(tmpInput.Name())
 	defer tmpInput.Close()
 
-	if _, err := tmpInput.ReadFrom(file); err != nil {
+	// Серверная проверка размера: ограничиваем чтение через LimitReader
+	limitedReader := &countingReader{r: io.LimitReader(file, h.cfg.Video.MaxSizeBytes+1)}
+	if _, err := tmpInput.ReadFrom(limitedReader); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save temp file"})
+		return
+	}
+
+	// Если прочитано больше лимита — файл слишком большой
+	if limitedReader.bytesRead > h.cfg.Video.MaxSizeBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
+			"error":   "Video file too large",
+			"maxSize": h.cfg.Video.MaxSizeBytes,
+		})
 		return
 	}
 
 	ctx := r.Context()
 
-	// Валидация видео
+	// Валидация видео (используем реальный размер, а не header.Size)
 	validator := video.NewValidator(&h.cfg.Video)
-	if err := validator.Validate(ctx, tmpInput.Name(), header.Size); err != nil {
+	if err := validator.Validate(ctx, tmpInput.Name(), limitedReader.bytesRead); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -126,6 +143,11 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	cid := parts[0]
 
+	if err := validateCID(cid); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	if h.unpinStore.Has(cid) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Video not found"})
 		return
@@ -154,8 +176,8 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 		cid = path[:dotIdx]
 	}
 
-	if cid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CID required"})
+	if err := validateCID(cid); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 

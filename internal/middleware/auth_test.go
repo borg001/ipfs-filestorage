@@ -8,14 +8,14 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/auth/lua"
 )
 
-func okHandler() http.Handler {
+func testOkHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 }
 
 func TestAuthMiddleware_StaticKey(t *testing.T) {
-	handler := AuthMiddleware([]string{"secret"}, nil)(okHandler())
+	handler := AuthMiddleware([]string{"secret"}, nil)(testOkHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-API-Key", "secret")
@@ -28,7 +28,7 @@ func TestAuthMiddleware_StaticKey(t *testing.T) {
 }
 
 func TestAuthMiddleware_BearerToken(t *testing.T) {
-	handler := AuthMiddleware([]string{"mytoken"}, nil)(okHandler())
+	handler := AuthMiddleware([]string{"mytoken"}, nil)(testOkHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer mytoken")
@@ -41,7 +41,7 @@ func TestAuthMiddleware_BearerToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_NoToken(t *testing.T) {
-	handler := AuthMiddleware([]string{"secret"}, nil)(okHandler())
+	handler := AuthMiddleware([]string{"secret"}, nil)(testOkHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
@@ -53,7 +53,7 @@ func TestAuthMiddleware_NoToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_InvalidKey(t *testing.T) {
-	handler := AuthMiddleware([]string{"secret"}, nil)(okHandler())
+	handler := AuthMiddleware([]string{"secret"}, nil)(testOkHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-API-Key", "wrong")
@@ -65,14 +65,38 @@ func TestAuthMiddleware_InvalidKey(t *testing.T) {
 	}
 }
 
+func TestAuthMiddleware_GenericErrorMessage(t *testing.T) {
+	// Lua script that errors — ensure client gets generic message, not internals
+	script := `function authorize(req) error("boom") end`
+	luaProvider := lua.NewProvider(script, 3000, 0, nil)
+	handler := AuthMiddleware([]string{"secret"}, luaProvider)(testOkHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Custom", "value")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if body == "" {
+		t.Fatal("expected error body")
+	}
+	// Should NOT contain "boom" or internal Lua error details
+	if contains(body, "boom") {
+		t.Fatalf("error message should not expose internal details, got: %s", body)
+	}
+}
+
 func TestAuthMiddleware_LuaFallback(t *testing.T) {
 	script := `
 function authorize(req)
   return req.headers["X-Custom"] == "yes"
 end
 `
-	luaProvider := lua.NewProvider(script, 3000, nil)
-	handler := AuthMiddleware([]string{"static-key"}, luaProvider)(okHandler())
+	luaProvider := lua.NewProvider(script, 3000, 0, nil)
+	handler := AuthMiddleware([]string{"static-key"}, luaProvider)(testOkHandler())
 
 	// Static key works
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -117,4 +141,13 @@ func TestAuthMiddleware_UserIDInContext(t *testing.T) {
 	if userID != "api-key" {
 		t.Fatalf("expected user_id 'api-key', got %s", userID)
 	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

@@ -7,6 +7,7 @@ import (
 )
 
 // registerJSONLib exposes json.encode(table) and json.decode(string) in the Lua VM.
+// Registered in package.loaded so require("json") works without filesystem access.
 func registerJSONLib(L *lua.LState) {
 	mod := L.NewTable()
 
@@ -35,6 +36,12 @@ func registerJSONLib(L *lua.LState) {
 		return 1
 	}))
 
+	// Register in package.loaded so require("json") works
+	L.GetField(lua.RegistryIndex, "_LOADED")
+	L.SetField(L.Get(-1), "json", mod)
+	L.Pop(1)
+
+	// Also set as global
 	L.SetGlobal("json", mod)
 }
 

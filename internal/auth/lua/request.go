@@ -3,73 +3,117 @@ package lua
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 
 	lua "github.com/yuin/gopher-lua"
 )
 
-// registerRequestLib exposes `request.get(url, opts)` and `request.post(url, opts)`
-// inside the Lua VM. opts is a table with optional `headers` and `body` fields.
+// registerRequestLib exposes request.get/post/put/del inside the Lua VM.
+// All HTTP requests are validated for SSRF protection — private IPs and
+// cloud metadata endpoints are blocked.
 func (p *Provider) registerRequestLib(L *lua.LState) {
 	mod := L.NewTable()
 
-	L.SetField(mod, "get", L.NewFunction(func(L *lua.LState) int {
-		url := L.CheckString(1)
-		opts := L.OptTable(2, L.NewTable())
-		resp, err := p.doRequest("GET", url, opts)
-		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
-		}
-		L.Push(respToTable(L, resp))
-		return 1
-	}))
+	methods := []struct {
+		name   string
+		method string
+	}{
+		{"get", "GET"},
+		{"post", "POST"},
+		{"put", "PUT"},
+		{"del", "DELETE"},
+	}
 
-	L.SetField(mod, "post", L.NewFunction(func(L *lua.LState) int {
-		url := L.CheckString(1)
-		opts := L.OptTable(2, L.NewTable())
-		resp, err := p.doRequest("POST", url, opts)
-		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
-		}
-		L.Push(respToTable(L, resp))
-		return 1
-	}))
+	for _, m := range methods {
+		name := m.name
+		method := m.method
+		L.SetField(mod, name, L.NewFunction(func(L *lua.LState) int {
+			rawURL := L.CheckString(1)
+			opts := L.OptTable(2, L.NewTable())
 
-	L.SetField(mod, "put", L.NewFunction(func(L *lua.LState) int {
-		url := L.CheckString(1)
-		opts := L.OptTable(2, L.NewTable())
-		resp, err := p.doRequest("PUT", url, opts)
-		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
-		}
-		L.Push(respToTable(L, resp))
-		return 1
-	}))
+			if err := validateURL(rawURL); err != nil {
+				// SSRF attempt — raise error so it propagates to Authorize()
+				L.RaiseError("url blocked: %s", err.Error())
+				return 0
+			}
 
-	L.SetField(mod, "del", L.NewFunction(func(L *lua.LState) int {
-		url := L.CheckString(1)
-		opts := L.OptTable(2, L.NewTable())
-		resp, err := p.doRequest("DELETE", url, opts)
-		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
-		}
-		L.Push(respToTable(L, resp))
-		return 1
-	}))
+			resp, err := p.doRequest(method, rawURL, opts)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(respToTable(L, resp))
+			return 1
+		}))
+	}
 
 	L.SetGlobal("request", mod)
 }
 
-func (p *Provider) doRequest(method, url string, opts *lua.LTable) (*http.Response, error) {
-	req, err := http.NewRequest(method, url, nil)
+// validateURL blocks SSRF attempts: private IPs, link-local, loopback, cloud metadata.
+func validateURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid url: %w", err)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("empty host")
+	}
+
+	// Block cloud metadata endpoint
+	if host == "169.254.169.254" {
+		return fmt.Errorf("cloud metadata access blocked")
+	}
+
+	// Resolve hostname to IP
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("dns resolution failed for %s", host)
+	}
+
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			return fmt.Errorf("private ip access blocked: %s", ip)
+		}
+	}
+
+	return nil
+}
+
+// isPrivateIP checks if an IP is in a private/reserved range.
+func isPrivateIP(ip net.IP) bool {
+	privateRanges := []struct {
+		cidr string
+	}{
+		{"10.0.0.0/8"},
+		{"172.16.0.0/12"},
+		{"192.168.0.0/16"},
+		{"127.0.0.0/8"},
+		{"169.254.0.0/16"},
+		{"::1/128"},
+		{"fc00::/7"},
+		{"fe80::/10"},
+	}
+
+	for _, r := range privateRanges {
+		_, network, err := net.ParseCIDR(r.cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Provider) doRequest(method, rawURL string, opts *lua.LTable) (*http.Response, error) {
+	req, err := http.NewRequest(method, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %w", err)
 	}
