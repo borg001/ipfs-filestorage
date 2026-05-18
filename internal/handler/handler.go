@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
@@ -68,6 +70,36 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 	n, err := cr.r.Read(p)
 	cr.bytesRead += int64(n)
 	return n, err
+}
+
+// validateCID checks that a string looks like a valid IPFS CID.
+func validateCID(cid string) error {
+	if cid == "" {
+		return fmt.Errorf("CID required")
+	}
+	// Accept Qm... (CIDv0) and bafy.../bafk... (CIDv1)
+	if strings.HasPrefix(cid, "Qm") && len(cid) >= 46 {
+		return nil
+	}
+	if (strings.HasPrefix(cid, "bafy") || strings.HasPrefix(cid, "bafk")) && len(cid) >= 50 {
+		return nil
+	}
+	return fmt.Errorf("invalid CID format")
+}
+
+// checkDiskSpace verifies there is enough free disk space for an operation.
+// Returns error with HTTP 507 if insufficient.
+func checkDiskSpace(dir string, requiredBytes int64) error {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(dir, &stat); err != nil {
+		// If we can't check, allow the operation (best effort)
+		return nil
+	}
+	freeBytes := int64(stat.Bavail) * int64(stat.Bsize)
+	if freeBytes < requiredBytes {
+		return fmt.Errorf("insufficient disk space: need %d bytes, %d available", requiredBytes, freeBytes)
+	}
+	return nil
 }
 
 // HandleUpload обрабатывает POST /upload (один файл).
@@ -230,8 +262,8 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 // HandleFile обрабатывает GET /file/{cid}.
 func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	cid := strings.TrimPrefix(r.URL.Path, "/file/")
-	if cid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CID required"})
+	if err := validateCID(cid); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -263,18 +295,20 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 // HandleDelete обрабатывает DELETE /file/{cid}.
 func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	cid := strings.TrimPrefix(r.URL.Path, "/file/")
-	if cid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CID required"})
+	if err := validateCID(cid); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
 	// Добавляем в unpin-список (soft-delete)
 	h.unpinStore.Add(cid)
 
-	// Асинхронный unpin на всех нодах
-	ctx := r.Context()
+	// Асинхронный unpin на всех нодах — используем detached context
+	// (request context отменяется когда клиент закрывает соединение)
 	go func() {
-		h.cluster.ClusterUnpinAll(ctx, cid)
+		unpinCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		h.cluster.ClusterUnpinAll(unpinCtx, cid)
 	}()
 
 	writeJSON(w, http.StatusOK, map[string]string{
