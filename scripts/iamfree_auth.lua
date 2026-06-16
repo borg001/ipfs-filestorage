@@ -7,6 +7,12 @@ function authorize(req)
     token = req.headers["X-API-Key"]
   end
   if not token or token == "" then
+    token = req.query["token"] or req.query["access_token"]
+    if token and token ~= "" then
+      token = "Bearer " .. token
+    end
+  end
+  if not token or token == "" then
     return false
   end
 

@@ -26,7 +26,8 @@ func AuthMiddleware(apiKeys []string, luaProvider *lua.Provider) func(http.Handl
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extract token from Authorization: Bearer or X-API-Key
+			// Extract token from Authorization, X-API-Key, or query string.
+			// Query tokens are needed for browser-managed media requests like <img src>.
 			token := extractToken(r)
 
 			// 1. Check static API keys (if token present)
@@ -68,6 +69,13 @@ func extractToken(r *http.Request) string {
 	// Check X-API-Key
 	if key := r.Header.Get("X-API-Key"); key != "" {
 		return key
+	}
+	// Browser image/video tags cannot send Authorization headers.
+	if token := r.URL.Query().Get("token"); token != "" {
+		return token
+	}
+	if token := r.URL.Query().Get("access_token"); token != "" {
+		return token
 	}
 	return ""
 }
