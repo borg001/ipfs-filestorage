@@ -33,7 +33,7 @@ func (p *Provider) registerRequestLib(L *lua.LState) {
 			rawURL := L.CheckString(1)
 			opts := L.OptTable(2, L.NewTable())
 
-			if err := validateURL(rawURL); err != nil {
+			if err := p.validateURL(rawURL); err != nil {
 				// SSRF attempt — raise error so it propagates to Authorize()
 				L.RaiseError("url blocked: %s", err.Error())
 				return 0
@@ -54,7 +54,7 @@ func (p *Provider) registerRequestLib(L *lua.LState) {
 }
 
 // validateURL blocks SSRF attempts: private IPs, link-local, loopback, cloud metadata.
-func validateURL(rawURL string) error {
+func (p *Provider) validateURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid url: %w", err)
@@ -69,6 +69,7 @@ func validateURL(rawURL string) error {
 	if host == "169.254.169.254" {
 		return fmt.Errorf("cloud metadata access blocked")
 	}
+	_, allowPrivate := p.allowedPrivateHosts[host]
 
 	// Resolve hostname to IP
 	ips, err := net.LookupIP(host)
@@ -77,7 +78,7 @@ func validateURL(rawURL string) error {
 	}
 
 	for _, ip := range ips {
-		if isPrivateIP(ip) {
+		if isPrivateIP(ip) && !allowPrivate {
 			return fmt.Errorf("private ip access blocked: %s", ip)
 		}
 	}

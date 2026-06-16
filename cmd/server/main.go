@@ -22,6 +22,14 @@ func main() {
 	// Initialize Lua auth provider if configured
 	var luaProvider *lua.Provider
 	if cfg.Auth.LuaScript != "" {
+		luaScript := cfg.Auth.LuaScript
+		if strings.HasSuffix(luaScript, ".lua") || strings.HasPrefix(luaScript, "/") || strings.HasPrefix(luaScript, "./") {
+			data, err := os.ReadFile(luaScript)
+			if err != nil {
+				log.Fatalf("[AUTH] Failed to read Lua script %q: %v", luaScript, err)
+			}
+			luaScript = string(data)
+		}
 		envWhitelist := make(map[string]string)
 		for _, key := range strings.Split(cfg.Auth.LuaEnvWhitelist, ",") {
 			if k := strings.TrimSpace(key); k != "" {
@@ -29,10 +37,11 @@ func main() {
 			}
 		}
 		luaProvider = lua.NewProvider(
-			cfg.Auth.LuaScript,
+			luaScript,
 			cfg.Auth.LuaTimeoutMs,
 			cfg.Auth.LuaMaxMemoryMB,
 			envWhitelist,
+			splitCSV(cfg.Auth.LuaAllowedPrivateHosts),
 		)
 		log.Printf("[AUTH] Lua script configured (timeout=%dms, maxMemory=%dMB)",
 			cfg.Auth.LuaTimeoutMs, cfg.Auth.LuaMaxMemoryMB)
@@ -80,4 +89,14 @@ func main() {
 	if err := http.ListenAndServe(":"+port, wrapped); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+func splitCSV(value string) []string {
+	var out []string
+	for _, item := range strings.Split(value, ",") {
+		if v := strings.TrimSpace(item); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

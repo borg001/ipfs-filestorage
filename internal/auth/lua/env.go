@@ -30,10 +30,10 @@ func registerEnvLib(L *lua.LState, whitelist map[string]string) {
 		return 1
 	}))
 
-	// Register in package.loaded so require("env") works
-	L.GetField(lua.RegistryIndex, "_LOADED")
-	L.SetField(L.Get(-1), "env", mod)
-	L.Pop(1)
+	// Register in package.loaded so require("env") works.
+	pkg := L.GetGlobal("package")
+	loaded := L.GetField(pkg, "loaded")
+	L.SetField(loaded, "env", mod)
 
 	// Also set as global
 	L.SetGlobal("env", mod)

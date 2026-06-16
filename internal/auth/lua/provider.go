@@ -13,24 +13,40 @@ import (
 // Provider executes a sandboxed Lua script to validate requests.
 // If no script is configured, Authorize always returns (false, nil).
 type Provider struct {
-	script       string
-	timeoutMs    int
-	envWhitelist map[string]string
-	httpClient   *http.Client
+	script              string
+	timeoutMs           int
+	envWhitelist        map[string]string
+	allowedPrivateHosts map[string]struct{}
+	httpClient          *http.Client
 }
 
 // NewProvider creates a new Lua auth provider.
 // script is the Lua source code; empty string means disabled.
 // timeoutMs is the max execution time in milliseconds (0 → 3000).
 // envWhitelist maps allowed env var names to their values.
-func NewProvider(script string, timeoutMs int, envWhitelist map[string]string) *Provider {
+func NewProvider(script string, timeoutMs int, args ...interface{}) *Provider {
 	if timeoutMs <= 0 {
 		timeoutMs = 3000
 	}
+	envWhitelist := map[string]string{}
+	allowedPrivateHosts := map[string]struct{}{}
+	for _, arg := range args {
+		if v, ok := arg.(map[string]string); ok {
+			envWhitelist = v
+		}
+		if v, ok := arg.([]string); ok {
+			for _, host := range v {
+				if host != "" {
+					allowedPrivateHosts[host] = struct{}{}
+				}
+			}
+		}
+	}
 	return &Provider{
-		script:       script,
-		timeoutMs:    timeoutMs,
-		envWhitelist: envWhitelist,
+		script:              script,
+		timeoutMs:           timeoutMs,
+		envWhitelist:        envWhitelist,
+		allowedPrivateHosts: allowedPrivateHosts,
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutMs) * time.Millisecond,
 		},
@@ -78,6 +94,21 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 		L.Call(1, 0)
 	}
 
+	loaded := L.NewTable()
+	pkg := L.NewTable()
+	L.SetField(pkg, "loaded", loaded)
+	L.SetGlobal("package", pkg)
+	L.SetGlobal("require", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		mod := L.GetField(loaded, name)
+		if mod == lua.LNil {
+			L.RaiseError("module %q is not available", name)
+			return 0
+		}
+		L.Push(mod)
+		return 1
+	}))
+
 	// Override dangerous base functions with no-ops
 	L.SetGlobal("dofile", L.NewFunction(func(L *lua.LState) int { return 0 }))
 	L.SetGlobal("loadfile", L.NewFunction(func(L *lua.LState) int { return 0 }))
@@ -95,8 +126,7 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	reqTable := buildReqTable(L, r)
 	L.SetGlobal("req", reqTable)
 
-	// Register modules in package.loaded so require() works
-	loaded := L.GetField(L.Get(lua.RegistryIndex), "_LOADED")
+	// Register modules in package.loaded so require() works.
 	L.SetField(loaded, "request", L.GetGlobal("request"))
 	L.SetField(loaded, "json", L.GetGlobal("json"))
 	L.SetField(loaded, "env", L.GetGlobal("env"))

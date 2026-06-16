@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -60,9 +61,20 @@ func NewHandler(cfg *config.Config) *Handler {
 	return h
 }
 
+func (h *Handler) replicateAsync(cid string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		retryDelay := time.Duration(h.cfg.Pinning.RetryDelayMs) * time.Millisecond
+		if err := h.cluster.ClusterReplicate(ctx, cid, h.cfg.Pinning.Retries, retryDelay); err != nil {
+			log.Printf("[replication] async replication failed for %s: %v", cid, err)
+		}
+	}()
+}
+
 // countingReader оборачивает io.Reader и считает прочитанные байты.
 type countingReader struct {
-	r        io.Reader
+	r         io.Reader
 	bytesRead int64
 }
 
@@ -147,12 +159,7 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Репликация на все ноды кластера (Fetch + Pin)
-	retryDelay := time.Duration(h.cfg.Pinning.RetryDelayMs) * time.Millisecond
-	if err := h.cluster.ClusterReplicate(ctx, result.CID, h.cfg.Pinning.Retries, retryDelay); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Replication failed"})
-		return
-	}
+	h.replicateAsync(result.CID)
 
 	// Используем проверенный сервером размер, а не header.Size
 	resp := Response{
@@ -199,8 +206,6 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	errorsList := make([]string, 0)
-	retryDelay := time.Duration(h.cfg.Pinning.RetryDelayMs) * time.Millisecond
-
 	for i, fh := range files {
 		wg.Add(1)
 		go func(idx int, fileHeader *multipart.FileHeader) {
@@ -233,8 +238,7 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Репликация на все ноды кластера (Fetch + Pin)
-			_ = h.cluster.ClusterReplicate(ctx, result.CID, h.cfg.Pinning.Retries, retryDelay)
+			h.replicateAsync(result.CID)
 
 			mu.Lock()
 			results[idx] = Response{
