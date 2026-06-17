@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -290,10 +291,18 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	w.Header().Set("Content-Type", "application/octet-stream")
+	buffered := bufio.NewReader(reader)
+	sniff, err := buffered.Peek(512)
+	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to read file"})
+		return
+	}
+	contentType := http.DetectContentType(sniff)
+
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, reader)
+	io.Copy(w, buffered)
 }
 
 // HandleDelete обрабатывает DELETE /file/{cid}.
