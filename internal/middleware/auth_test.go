@@ -40,6 +40,30 @@ func TestAuthMiddleware_BearerToken(t *testing.T) {
 	}
 }
 
+func TestAuthMiddleware_QueryToken(t *testing.T) {
+	handler := AuthMiddleware([]string{"mytoken"}, nil)(testOkHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/file/Qm123?token=mytoken", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for query token, got %d", rr.Code)
+	}
+}
+
+func TestAuthMiddleware_QueryAccessToken(t *testing.T) {
+	handler := AuthMiddleware([]string{"mytoken"}, nil)(testOkHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/file/Qm123?access_token=mytoken", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for query access_token, got %d", rr.Code)
+	}
+}
+
 func TestAuthMiddleware_NoToken(t *testing.T) {
 	handler := AuthMiddleware([]string{"secret"}, nil)(testOkHandler())
 

@@ -10,15 +10,15 @@ import (
 
 // Config holds all configuration for the service.
 type Config struct {
-	Server   ServerConfig
-	IPFS     IPFSConfig
-	API      APIConfig
-	Upload   UploadConfig
-	Pinning  PinningConfig
-	Unpin    UnpinConfig
-	CORS     CORSConfig
-	Video    VideoConfig
-	Auth     AuthConfig
+	Server    ServerConfig
+	IPFS      IPFSConfig
+	API       APIConfig
+	Upload    UploadConfig
+	Pinning   PinningConfig
+	Unpin     UnpinConfig
+	CORS      CORSConfig
+	Video     VideoConfig
+	Auth      AuthConfig
 	RateLimit RateLimitConfig
 }
 
@@ -50,11 +50,11 @@ type PinningConfig struct {
 
 type UnpinConfig struct {
 	// TTL после которого GC физически анпиннит файл из unpin-списка
-	TTL        time.Duration
+	TTL time.Duration
 	// Интервал запуска GC-воркера
 	GCInterval time.Duration
 	// Путь к JSON-файлу для персистентности unpin-списка
-	StorePath  string
+	StorePath string
 }
 
 type CORSConfig struct {
@@ -120,22 +120,24 @@ func Load() *Config {
 		},
 		Upload: UploadConfig{
 			MaxFileSize:       getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
-			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "pdf", "doc", "docx", "zip", "json", "html", "mp4", "mov", "webm", "avi"}),
+			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "pdf", "doc", "docx", "zip", "json", "html", "txt", "mp4", "mov", "webm", "avi"}),
 			AllowedMimeTypes: map[string]bool{
-				"image/png":               true,
-				"image/svg+xml":           true,
-				"image/jpeg":              true,
-				"application/pdf":         true,
-				"application/msword":      true,
+				"image/png":          true,
+				"image/svg+xml":      true,
+				"image/jpeg":         true,
+				"application/pdf":    true,
+				"application/msword": true,
 				"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
-				"application/zip":         true,
-				"application/json":        true,
-				"application/octet-stream": true,
-				"text/html":               true,
-				"video/mp4":               true,
-				"video/quicktime":         true,
-				"video/webm":              true,
-				"video/x-msvideo":         true,
+				"application/zip":           true,
+				"application/json":          true,
+				"application/octet-stream":  true,
+				"text/html":                 true,
+				"text/plain":                true,
+				"text/plain; charset=utf-8": true,
+				"video/mp4":                 true,
+				"video/quicktime":           true,
+				"video/webm":                true,
+				"video/x-msvideo":           true,
 			},
 		},
 		Pinning: PinningConfig{
@@ -164,10 +166,10 @@ func Load() *Config {
 			TempDir:              getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
 		},
 		Auth: AuthConfig{
-			LuaScript:      getEnv("AUTH_LUA_SCRIPT", ""),
-			LuaTimeoutMs:   getEnvInt("AUTH_LUA_TIMEOUT_MS", 3000),
+			LuaScript:       getEnv("AUTH_LUA_SCRIPT", ""),
+			LuaTimeoutMs:    getEnvInt("AUTH_LUA_TIMEOUT_MS", 3000),
 			LuaEnvWhitelist: getEnv("AUTH_LUA_ENV_WHITELIST", "AUTH_SERVICE_URL"),
-			LuaMaxMemoryMB: getEnvInt("AUTH_LUA_MAX_MEMORY_MB", 32),
+			LuaMaxMemoryMB:  getEnvInt("AUTH_LUA_MAX_MEMORY_MB", 32),
 		},
 		RateLimit: RateLimitConfig{
 			RPS:   getEnvFloat("RATE_LIMIT_RPS", 10),

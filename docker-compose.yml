@@ -79,7 +79,7 @@ services:
       dockerfile: Dockerfile
     container_name: storage1
     ports:
-      - "3001:3000"   # Storage1 API on host port 3001
+      - "${STORAGE1_PORT:-3001}:3000"   # Storage1 API direct access
     env_file:
       - .env
     environment:
@@ -107,7 +107,7 @@ services:
       dockerfile: Dockerfile
     container_name: storage2
     ports:
-      - "3002:3000"   # Storage2 API on host port 3002
+      - "${STORAGE2_PORT:-3002}:3000"   # Storage2 API direct access
     env_file:
       - .env
     environment:
@@ -128,12 +128,12 @@ services:
       ipfs2:
         condition: service_healthy
 
-  # Nginx load balancer (on port 8081 — 8080 occupied by MCP)
+  # Nginx load balancer
   nginx:
     image: nginx:alpine
     container_name: nginx
     ports:
-      - "8081:80"
+      - "${NGINX_PORT:-8081}:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
