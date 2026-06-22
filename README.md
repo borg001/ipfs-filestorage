@@ -33,9 +33,9 @@ HTTP-сервис для децентрализованного хранения
                     └──────────────────────────────────────────────┘
 
 Порты на хосте:
-  nginx     → :8081   (балансировщик)
-  storage1  → :3001   (API напрямую)
-  storage2  → :3002   (API напрямую)
+  nginx     → :${NGINX_PORT:-8081}      (балансировщик)
+  storage1  → :${STORAGE1_PORT:-3001}   (API напрямую)
+  storage2  → :${STORAGE2_PORT:-3002}   (API напрямую)
 ```
 
 ### Компоненты
@@ -56,14 +56,14 @@ HTTP-сервис для децентрализованного хранения
 ### Репликация
 
 ```
-POST /upload → storage1 → ipfs1.Add() → CID
+POST /upload → storage1 → ipfs1.Add() → CID → 200 response
                                        ↓
-                         ClusterReplicate(CID):
+                         async ClusterReplicate(CID):
                            ├→ ipfs1: Fetch(Cat+drain) + Pin  (локально — быстро)
                            └→ ipfs2: Fetch(Cat+drain) + Pin  (bitswap через DHT)
 ```
 
-Ключевое: `Fetch()` вызывает `Cat()` и вычитывает весь поток. Это заставляет bitswap подтянуть ВСЕ блоки DAG с ноды-источника. После этого `Pin()` гарантирует, что данные физически на ноде. Без Fetch — Pin создаст маркер без реальных данных.
+Ключевое: `Fetch()` вызывает `Cat()` и вычитывает весь поток. Это заставляет bitswap подтянуть ВСЕ блоки DAG с ноды-источника. После этого `Pin()` гарантирует, что данные физически на ноде. Без Fetch — Pin создаст маркер без реальных данных. Для обычных upload-эндпоинтов репликация запускается асинхронно, чтобы клиент сразу получил CID; видео по-прежнему дожидается репликации всех связанных CID.
 
 ### Мягкое удаление
 
@@ -131,7 +131,16 @@ local env     = require("env")
 
 function authorize(req)
   local token = req.headers["Authorization"]
-  if not token then return false end
+  if not token or token == "" then
+    token = req.headers["X-API-Key"]
+  end
+  if not token or token == "" then
+    token = req.query["token"] or req.query["access_token"]
+    if token and token ~= "" then
+      token = "Bearer " .. token
+    end
+  end
+  if not token or token == "" then return false end
 
   local url = env.get("AUTH_SERVICE_URL")
   if not url then return false end
@@ -142,7 +151,7 @@ function authorize(req)
 
   if not resp or resp.status ~= 200 then return false end
   local data = json.decode(resp.body)
-  return data.active == true
+  return data.id ~= nil
 end
 ```
 
@@ -201,7 +210,15 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-API будет доступен на `http://localhost:8081` (nginx).
+API будет доступен на `http://localhost:${NGINX_PORT:-8081}` (nginx).
+
+Порты публикации контейнеров на хост настраиваются через `.env`:
+
+```env
+STORAGE1_PORT=3001
+STORAGE2_PORT=3002
+NGINX_PORT=8081
+```
 
 Подождите ~60 секунд — IPFS-нодам нужно время на инициализацию, healthcheck и подключение к bootstrap.
 
@@ -222,6 +239,12 @@ curl -s -X POST http://localhost:3001/upload \
 curl -s http://localhost:3002/file/QmXyZ... \
   -H "X-API-Key: SECRET_KEY_1" -o /dev/null -w "%{http_code}"
 # 200 — репликация работает
+```
+
+Для браузерных media URL, где нельзя добавить `Authorization` header, можно передать токен в query string:
+
+```bash
+curl -s "http://localhost:8081/file/QmXyZ...?token=SECRET_KEY_1" -o file.bin
 ```
 
 ### Загрузка видео
@@ -268,11 +291,14 @@ docker compose up --build -d
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `SERVER_PORT` | `3000` | Порт HTTP-сервера внутри контейнера |
+| `STORAGE1_PORT` | `3001` | Порт `storage1` на хосте для прямого доступа |
+| `STORAGE2_PORT` | `3002` | Порт `storage2` на хосте для прямого доступа |
+| `NGINX_PORT` | `8081` | Порт nginx-балансировщика на хосте |
 | `IPFS_URL` | `http://localhost:5001` | URL локальной IPFS-ноды (переопределяется в docker-compose) |
 | `CLUSTER_NODES` | `http://ipfs1:5001,http://ipfs2:5001` | Адреса всех нод кластера через запятую |
 | `API_KEYS` | `SECRET_KEY_1,SECRET_KEY_2` | Статические API-ключи через запятую (всегда активны) |
 | `UPLOAD_MAX_FILE_SIZE` | `10485760` (10 МБ) | Максимальный размер файла |
-| `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,pdf,doc,docx,zip,json,html` | Разрешённые расширения |
+| `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,pdf,doc,docx,zip,json,html,txt,mp4,mov,webm,avi` | Разрешённые расширения |
 | `PINNING_RETRIES` | `3` | Попыток пиннинга при репликации |
 | `PINNING_RETRY_DELAY_MS` | `1000` | Задержка между попытками (мс) |
 | `UNPIN_TTL` | `24h` | Время до физического удаления после soft-delete |
@@ -304,7 +330,7 @@ docker compose up --build -d
 
 ## API
 
-Все эндпоинты требуют аутентификацию: заголовок `Authorization: Bearer <token>` или `X-API-Key: <key>`.
+Все эндпоинты требуют аутентификацию: заголовок `Authorization: Bearer <token>`, `X-API-Key: <key>` или query-параметр `?token=<token>` / `?access_token=<token>` для браузерных media-запросов.
 
 ### Загрузка файла
 
