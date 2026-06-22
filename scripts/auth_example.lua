@@ -30,6 +30,6 @@ function authorize(req)
   if not resp or resp.status ~= 200 then return false end
 
   local data = json.decode(resp.body)
-  -- auth-service returns { active: true/false, ... }
-  return data.active == true
+  -- darkrain/auth-service returns user data only for a valid active session.
+  return data.id ~= nil
 end

@@ -187,6 +187,16 @@ end
 	}
 }
 
+func TestProvider_TrustedAuthHostAllowsPrivateAddress(t *testing.T) {
+	p := NewProvider("", 3000, map[string]string{
+		"AUTH_SERVICE_URL": "http://127.0.0.1:8080",
+	})
+
+	if err := p.validateURL("http://127.0.0.1:8080/api/session"); err != nil {
+		t.Fatalf("trusted auth host should bypass private IP SSRF block: %v", err)
+	}
+}
+
 func TestProvider_JSON(t *testing.T) {
 	script := `
 function authorize(req)
