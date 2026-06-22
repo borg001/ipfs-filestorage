@@ -46,14 +46,14 @@ DAEMON_PID=$!
 
 # Wait for API to be ready
 for i in $(seq 1 60); do
-    if wget -q --spider http://localhost:5001/api/v0/id 2>/dev/null; then
+    if wget -q --post-data= -O /dev/null http://localhost:5001/api/v0/id 2>/dev/null; then
         break
     fi
     sleep 1
 done
 
 # Print Peer ID for reference
-PEER_ID=$(wget -qO- http://localhost:5001/api/v0/id 2>/dev/null | grep -o '"ID":"[^"]*"' | head -1 | cut -d'"' -f4)
+PEER_ID=$(wget -q --post-data= -O - http://localhost:5001/api/v0/id 2>/dev/null | grep -o '"ID":"[^"]*"' | head -1 | cut -d'"' -f4)
 echo "=== Bootstrap Node Ready ==="
 echo "Peer ID: $PEER_ID"
 echo "Address: /dns4/ipfs-bootstrap/tcp/4001/p2p/$PEER_ID"

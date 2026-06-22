@@ -43,7 +43,7 @@ DAEMON_PID=$!
 
 # Wait for API to be ready
 for i in $(seq 1 60); do
-    if wget -q --spider http://localhost:5001/api/v0/id 2>/dev/null; then
+    if wget -q --post-data= -O /dev/null http://localhost:5001/api/v0/id 2>/dev/null; then
         break
     fi
     sleep 1
@@ -56,7 +56,7 @@ if [ -n "$IPFS_BOOTSTRAP_HOST" ]; then
 
     # Wait for bootstrap API to be reachable
     for i in $(seq 1 30); do
-        if wget -q --spider "http://$IPFS_BOOTSTRAP_HOST:5001/api/v0/id" 2>/dev/null; then
+        if wget -q --post-data= -O /dev/null "http://$IPFS_BOOTSTRAP_HOST:5001/api/v0/id" 2>/dev/null; then
             break
         fi
         echo "Waiting for bootstrap API... ($i/30)"
@@ -64,7 +64,7 @@ if [ -n "$IPFS_BOOTSTRAP_HOST" ]; then
     done
 
     # Get bootstrap node's Peer ID from its API
-    BOOTSTRAP_ID=$(wget -qO- "http://$IPFS_BOOTSTRAP_HOST:5001/api/v0/id" 2>/dev/null \
+    BOOTSTRAP_ID=$(wget -q --post-data= -O - "http://$IPFS_BOOTSTRAP_HOST:5001/api/v0/id" 2>/dev/null \
         | grep -o '"ID":"[^"]*"' | head -1 | cut -d'"' -f4)
 
     if [ -n "$BOOTSTRAP_ID" ]; then

@@ -22,6 +22,11 @@ func main() {
 	// Initialize Lua auth provider if configured
 	var luaProvider *lua.Provider
 	if cfg.Auth.LuaScript != "" {
+		script, err := os.ReadFile(cfg.Auth.LuaScript)
+		if err != nil {
+			log.Fatalf("[AUTH] failed to read Lua script %q: %v", cfg.Auth.LuaScript, err)
+		}
+
 		envWhitelist := make(map[string]string)
 		for _, key := range strings.Split(cfg.Auth.LuaEnvWhitelist, ",") {
 			if k := strings.TrimSpace(key); k != "" {
@@ -29,7 +34,7 @@ func main() {
 			}
 		}
 		luaProvider = lua.NewProvider(
-			cfg.Auth.LuaScript,
+			string(script),
 			cfg.Auth.LuaTimeoutMs,
 			cfg.Auth.LuaMaxMemoryMB,
 			envWhitelist,

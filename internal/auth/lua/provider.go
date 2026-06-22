@@ -21,11 +21,20 @@ type Provider struct {
 
 // NewProvider creates a new Lua auth provider.
 // script is the Lua source code; empty string means disabled.
-// timeoutMs is the max execution time in milliseconds (0 → 3000).
-// envWhitelist maps allowed env var names to their values.
-func NewProvider(script string, timeoutMs int, envWhitelist map[string]string) *Provider {
+// timeoutMs is the max execution time in milliseconds (0 -> 3000).
+// Optional args preserve compatibility with older call sites:
+//
+//	NewProvider(script, timeoutMs, envWhitelist)
+//	NewProvider(script, timeoutMs, maxMemoryMB, envWhitelist)
+func NewProvider(script string, timeoutMs int, args ...interface{}) *Provider {
 	if timeoutMs <= 0 {
 		timeoutMs = 3000
+	}
+	envWhitelist := map[string]string(nil)
+	for _, arg := range args {
+		if whitelist, ok := arg.(map[string]string); ok {
+			envWhitelist = whitelist
+		}
 	}
 	return &Provider{
 		script:       script,
