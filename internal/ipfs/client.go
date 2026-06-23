@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/ipfs/boxo/files"
@@ -56,6 +57,20 @@ func (c *Client) Add(ctx context.Context, filename string, r io.Reader) (*AddRes
 		CID:  resolved.RootCid().String(),
 		Name: filename,
 	}, nil
+}
+
+// AddDir загружает UnixFS directory в IPFS и возвращает root CID.
+func (c *Client) AddDir(ctx context.Context, entries map[string][]byte) (*AddResult, error) {
+	nodes := make(map[string]files.Node, len(entries))
+	for name, data := range entries {
+		nodes[name] = files.NewBytesFile(data)
+	}
+	dir := files.NewMapDirectory(nodes)
+	resolved, err := c.api.Unixfs().Add(ctx, dir, options.Unixfs.Pin(false))
+	if err != nil {
+		return nil, fmt.Errorf("ipfs add dir failed: %w", err)
+	}
+	return &AddResult{CID: resolved.RootCid().String(), Name: ""}, nil
 }
 
 // Pin пиннит CID с retry-логикой, идемпотентен
@@ -114,22 +129,61 @@ func (c *Client) Cat(ctx context.Context, cidStr string) (io.ReadCloser, error) 
 	return f, nil
 }
 
+// CatPath читает файл внутри UnixFS directory CID.
+func (c *Client) CatPath(ctx context.Context, cidStr, filePath string) (io.ReadCloser, error) {
+	p, err := path.NewPath("/ipfs/" + cidStr + "/" + filePath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid IPFS path %q/%q: %w", cidStr, filePath, err)
+	}
+	node, err := c.api.Unixfs().Get(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("ipfs get failed for %s/%s: %w", cidStr, filePath, err)
+	}
+	f, ok := node.(files.File)
+	if !ok {
+		return nil, fmt.Errorf("path %s/%s is not a file", cidStr, filePath)
+	}
+	return f, nil
+}
+
 // Fetch подтягивает все блоки CID с других нод через bitswap.
 // Вызывает Cat() и полностью вычитывает reader, чтобы гарантировать
 // передачу всех блоков DAG. После Fetch блоки локальны, и Pin сработает.
 func (c *Client) Fetch(ctx context.Context, cidStr string) error {
-	reader, err := c.Cat(ctx, cidStr)
+	p, err := parsePath(cidStr)
 	if err != nil {
-		return fmt.Errorf("fetch cat failed for %s: %w", cidStr, err)
+		return err
 	}
-	defer reader.Close()
-
-	// Вычитываем весь поток, чтобы bitswap гарантированно
-	// подтянул все блоки DAG на эту ноду
-	if _, err := io.Copy(io.Discard, reader); err != nil {
+	node, err := c.api.Unixfs().Get(ctx, p)
+	if err != nil {
+		return fmt.Errorf("ipfs get failed for %s: %w", cidStr, err)
+	}
+	if err := drainUnixFS(node); err != nil {
 		return fmt.Errorf("fetch drain failed for %s: %w", cidStr, err)
 	}
 	return nil
+}
+
+func drainUnixFS(node files.Node) error {
+	switch n := node.(type) {
+	case files.File:
+		defer n.Close()
+		_, err := io.Copy(io.Discard, n)
+		return err
+	case files.Directory:
+		entries := n.Entries()
+		for entries.Next() {
+			if err := drainUnixFS(entries.Node()); err != nil {
+				return err
+			}
+		}
+		if err := entries.Err(); err != nil && !strings.Contains(err.Error(), "EOF") {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported UnixFS node %T", node)
+	}
 }
 
 // Stat возвращает метаданные файла по CID.

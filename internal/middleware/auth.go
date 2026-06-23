@@ -26,6 +26,11 @@ func AuthMiddleware(apiKeys []string, luaProvider *lua.Provider) func(http.Handl
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && r.URL.Path == "/config" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			// Extract token from Authorization, X-API-Key, or query string.
 			// Query tokens are needed for browser-managed media requests like <img src>.
 			token := extractToken(r)
@@ -45,7 +50,7 @@ func AuthMiddleware(apiKeys []string, luaProvider *lua.Provider) func(http.Handl
 				if err != nil {
 					// Log details server-side only, return generic message to client
 					log.Printf("[AUTH] Lua error: %v", err)
-					writeAuthError(w, "Authentication failed")
+					writeAuthError(w, http.StatusUnauthorized, "Authentication failed")
 					return
 				}
 				if ok {
@@ -55,7 +60,11 @@ func AuthMiddleware(apiKeys []string, luaProvider *lua.Provider) func(http.Handl
 				}
 			}
 
-			writeAuthError(w, "Authentication required")
+			if token != "" {
+				writeAuthError(w, http.StatusForbidden, "Authentication failed")
+				return
+			}
+			writeAuthError(w, http.StatusUnauthorized, "Authentication required")
 		})
 	}
 }
@@ -80,9 +89,9 @@ func extractToken(r *http.Request) string {
 	return ""
 }
 
-func writeAuthError(w http.ResponseWriter, msg string) {
+func writeAuthError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
+	w.WriteHeader(status)
 	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
 }
 

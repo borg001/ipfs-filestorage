@@ -40,6 +40,14 @@ func (cm *ClusterManager) ClusterAdd(ctx context.Context, filename string, data 
 	return cm.nodes[0].Add(ctx, filename, data)
 }
 
+// ClusterAddDir загружает директорию на первую доступную ноду и возвращает root CID.
+func (cm *ClusterManager) ClusterAddDir(ctx context.Context, files map[string][]byte) (*AddResult, error) {
+	if len(cm.nodes) == 0 {
+		return nil, fmt.Errorf("no IPFS nodes in cluster")
+	}
+	return cm.nodes[0].AddDir(ctx, files)
+}
+
 // ClusterCat читает файл по CID, пытаясь последовательно все ноды.
 func (cm *ClusterManager) ClusterCat(ctx context.Context, cid string) (io.ReadCloser, error) {
 	if len(cm.nodes) == 0 {
@@ -212,6 +220,20 @@ func (cm *ClusterManager) ClusterTryFetch(ctx context.Context, cid string) (io.R
 		}
 	}
 	return nil, fmt.Errorf("file %s not available on any node", cid)
+}
+
+// ClusterTryFetchPath пытается прочитать path внутри directory CID, перебирая ноды.
+func (cm *ClusterManager) ClusterTryFetchPath(ctx context.Context, cid string, filePath string) (io.ReadCloser, error) {
+	if len(cm.nodes) == 0 {
+		return nil, fmt.Errorf("no IPFS nodes in cluster")
+	}
+	for _, node := range cm.nodes {
+		r, err := node.CatPath(ctx, cid, filePath)
+		if err == nil {
+			return r, nil
+		}
+	}
+	return nil, fmt.Errorf("file %s/%s not available on any node", cid, filePath)
 }
 
 // NodeURLs возвращает адреса всех нод кластера.

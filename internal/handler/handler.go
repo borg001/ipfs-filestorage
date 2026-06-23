@@ -3,17 +3,21 @@ package handler
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/borg001/ipfs-filestorage/internal/bundle"
 	"github.com/borg001/ipfs-filestorage/internal/config"
+	"github.com/borg001/ipfs-filestorage/internal/imageproc"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 	"github.com/borg001/ipfs-filestorage/internal/unpin"
@@ -21,10 +25,13 @@ import (
 
 // Response — стандартная структура ответа API.
 type Response struct {
-	CID    string `json:"cid"`
-	Name   string `json:"name"`
-	Size   int64  `json:"size"`
-	Pinned bool   `json:"pinned"`
+	CID      string                  `json:"cid"`
+	Name     string                  `json:"name"`
+	Size     int64                   `json:"size"`
+	Pinned   bool                    `json:"pinned"`
+	Type     string                  `json:"type,omitempty"`
+	Original *bundle.Asset           `json:"original,omitempty"`
+	Variants map[string]bundle.Asset `json:"variants,omitempty"`
 }
 
 // Handler содержит HTTP-хендлеры сервиса.
@@ -85,6 +92,74 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+func responseFromManifest(m bundle.Manifest, pinned bool) Response {
+	return Response{
+		CID:      m.CID,
+		Name:     m.Name,
+		Size:     m.Size,
+		Pinned:   pinned,
+		Type:     m.Type,
+		Original: &m.Original,
+		Variants: m.Variants,
+	}
+}
+
+func formatFromFilename(filename string) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(filename)), ".")
+	if ext == "jpg" {
+		return "jpeg"
+	}
+	if ext == "" {
+		return "bin"
+	}
+	return ext
+}
+
+func (h *Handler) buildFileBundle(ctx context.Context, filename string, data []byte, contentType string) (bundle.Manifest, error) {
+	manifest := bundle.NewFileManifest(filename, contentType, formatFromFilename(filename), int64(len(data)))
+	entries := map[string][]byte{
+		bundle.OriginalFilename: data,
+	}
+
+	processor := imageproc.NewProcessor(h.cfg.Image, h.cfg.Video.FFmpegPath)
+	imageResult, err := processor.Process(ctx, data, contentType)
+	if err != nil {
+		return bundle.Manifest{}, err
+	}
+	if imageResult.IsImage {
+		manifest.Type = "image"
+		manifest.Original.Format = imageResult.Format
+		manifest.Original.Width = imageResult.Width
+		manifest.Original.Height = imageResult.Height
+		if len(imageResult.Variants) > 0 {
+			manifest.Variants = make(map[string]bundle.Asset, len(imageResult.Variants))
+			for _, variant := range imageResult.Variants {
+				entries[variant.Filename] = variant.Data
+				manifest.Variants[variant.Key] = bundle.Asset{
+					BundlePath:  variant.Filename,
+					Format:      variant.Format,
+					ContentType: variant.ContentType,
+					Width:       variant.Width,
+					Height:      variant.Height,
+					Size:        int64(len(variant.Data)),
+				}
+			}
+		}
+	}
+
+	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return bundle.Manifest{}, err
+	}
+	entries[bundle.ManifestFilename] = manifestJSON
+	result, err := h.cluster.ClusterAddDir(ctx, entries)
+	if err != nil {
+		return bundle.Manifest{}, err
+	}
+	manifest.Finalize(result.CID)
+	return manifest, nil
+}
+
 // validateCID checks that a string looks like a valid IPFS CID.
 func validateCID(cid string) error {
 	if cid == "" {
@@ -137,13 +212,8 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Оборачиваем reader в countingReader для серверной проверки размера.
-	// Не доверяем header.Size из multipart — его легко подделать.
 	limitedReader := &countingReader{r: io.LimitReader(file, h.cfg.Upload.MaxFileSize+1)}
-
-	// Загрузка на первую ноду
-	ctx := r.Context()
-	result, err := h.cluster.ClusterAdd(ctx, header.Filename, limitedReader)
+	data, err := io.ReadAll(limitedReader)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Upload failed"})
 		return
@@ -152,7 +222,6 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Серверная проверка: если прочитано больше MaxFileSize — файл слишком большой.
 	// Это достоверная проверка, основанная на реальных байтах, а не на заголовке.
 	if limitedReader.bytesRead > h.cfg.Upload.MaxFileSize {
-		_ = h.cluster.ClusterUnpinAll(ctx, result.CID)
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
 			"error":   "File too large",
 			"maxSize": h.cfg.Upload.MaxFileSize,
@@ -160,16 +229,16 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.replicateAsync(result.CID)
-
-	// Используем проверенный сервером размер, а не header.Size
-	resp := Response{
-		CID:    result.CID,
-		Name:   header.Filename,
-		Size:   limitedReader.bytesRead,
-		Pinned: true,
+	ctx := r.Context()
+	contentType := http.DetectContentType(data)
+	manifest, err := h.buildFileBundle(ctx, header.Filename, data, contentType)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Upload failed"})
+		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+
+	h.replicateAsync(manifest.CID)
+	writeJSON(w, http.StatusOK, responseFromManifest(manifest, true))
 }
 
 // HandleUploadMultiple обрабатывает POST /upload-multiple.
@@ -221,10 +290,8 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			}
 			defer f.Close()
 
-			// Серверная проверка размера через countingReader
 			limitedReader := &countingReader{r: io.LimitReader(f, h.cfg.Upload.MaxFileSize+1)}
-
-			result, err := h.cluster.ClusterAdd(ctx, fileHeader.Filename, limitedReader)
+			data, err := io.ReadAll(limitedReader)
 			if err != nil {
 				mu.Lock()
 				errorsList = append(errorsList, fmt.Sprintf("%s: upload failed", fileHeader.Filename))
@@ -233,22 +300,24 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if limitedReader.bytesRead > h.cfg.Upload.MaxFileSize {
-				_ = h.cluster.ClusterUnpinAll(ctx, result.CID)
 				mu.Lock()
 				errorsList = append(errorsList, fmt.Sprintf("%s: file too large", fileHeader.Filename))
 				mu.Unlock()
 				return
 			}
 
-			h.replicateAsync(result.CID)
+			contentType := http.DetectContentType(data)
+			manifest, err := h.buildFileBundle(ctx, fileHeader.Filename, data, contentType)
+			if err != nil {
+				mu.Lock()
+				errorsList = append(errorsList, fmt.Sprintf("%s: upload failed", fileHeader.Filename))
+				mu.Unlock()
+				return
+			}
+			h.replicateAsync(manifest.CID)
 
 			mu.Lock()
-			results[idx] = Response{
-				CID:    result.CID,
-				Name:   fileHeader.Filename,
-				Size:   limitedReader.bytesRead,
-				Pinned: true,
-			}
+			results[idx] = responseFromManifest(manifest, true)
 			mu.Unlock()
 		}(i, fh)
 	}
@@ -265,9 +334,29 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-// HandleFile обрабатывает GET /file/{cid}.
+func (h *Handler) readManifest(ctx context.Context, cid string) (bundle.Manifest, error) {
+	reader, err := h.cluster.ClusterTryFetchPath(ctx, cid, bundle.ManifestFilename)
+	if err != nil {
+		return bundle.Manifest{}, err
+	}
+	defer reader.Close()
+	var manifest bundle.Manifest
+	if err := json.NewDecoder(reader).Decode(&manifest); err != nil {
+		return bundle.Manifest{}, err
+	}
+	manifest.Finalize(cid)
+	return manifest, nil
+}
+
+// HandleFile обрабатывает GET /file/{cid}, /file/{cid}/bundle и /file/{cid}/{size}.
 func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
-	cid := strings.TrimPrefix(r.URL.Path, "/file/")
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/file/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CID required"})
+		return
+	}
+	cid := parts[0]
 	if err := validateCID(cid); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -284,8 +373,34 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Пытаемся получить данные из кластера
-	reader, err := h.cluster.ClusterTryFetch(ctx, cid)
+	manifest, err := h.readManifest(ctx, cid)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "bundle" {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		writeJSON(w, http.StatusOK, manifest)
+		return
+	}
+
+	bundlePath := manifest.Original.BundlePath
+	contentType := manifest.Original.ContentType
+	if len(parts) == 2 && parts[1] != "" {
+		variant, ok := manifest.Variants[parts[1]]
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Variant not found"})
+			return
+		}
+		bundlePath = variant.BundlePath
+		contentType = variant.ContentType
+	} else if len(parts) > 2 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
+		return
+	}
+
+	reader, err := h.cluster.ClusterTryFetchPath(ctx, cid, bundlePath)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
@@ -293,15 +408,17 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	defer reader.Close()
 
 	buffered := bufio.NewReader(reader)
-	sniff, err := buffered.Peek(512)
-	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to read file"})
-		return
+	if contentType == "" {
+		sniff, err := buffered.Peek(512)
+		if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to read file"})
+			return
+		}
+		contentType = http.DetectContentType(sniff)
 	}
-	contentType := http.DetectContentType(sniff)
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, buffered)
 }

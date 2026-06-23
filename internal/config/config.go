@@ -14,6 +14,7 @@ type Config struct {
 	IPFS      IPFSConfig
 	API       APIConfig
 	Upload    UploadConfig
+	Image     ImageConfig
 	Pinning   PinningConfig
 	Unpin     UnpinConfig
 	CORS      CORSConfig
@@ -41,6 +42,22 @@ type UploadConfig struct {
 	MaxFileSize       int64
 	AllowedExtensions []string
 	AllowedMimeTypes  map[string]bool
+}
+
+type ImageVariant struct {
+	Key    string `json:"key"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+type ImageConfig struct {
+	ProcessingEnabled bool
+	Variants          []ImageVariant
+	OutputFormat      string
+	JPEGProgressive   bool
+	JPEGQuality       int
+	WebPQuality       int
+	ResizePolicy      string
 }
 
 type PinningConfig struct {
@@ -140,6 +157,15 @@ func Load() *Config {
 				"video/x-msvideo":           true,
 			},
 		},
+		Image: ImageConfig{
+			ProcessingEnabled: getEnvBool("IMAGE_PROCESSING_ENABLED", true),
+			Variants:          getEnvImageVariants("IMAGE_VARIANTS", []ImageVariant{{Key: "100x100", Width: 100, Height: 100}, {Key: "320x320", Width: 320, Height: 320}, {Key: "640x640", Width: 640, Height: 640}, {Key: "1024x1024", Width: 1024, Height: 1024}}),
+			OutputFormat:      validateChoice(getEnv("IMAGE_OUTPUT_FORMAT", "auto"), []string{"auto", "jpeg", "webp"}, "auto"),
+			JPEGProgressive:   getEnvBool("IMAGE_JPEG_PROGRESSIVE", true),
+			JPEGQuality:       clampInt(getEnvInt("IMAGE_JPEG_QUALITY", 82), 1, 100),
+			WebPQuality:       clampInt(getEnvInt("IMAGE_WEBP_QUALITY", 82), 1, 100),
+			ResizePolicy:      validateChoice(getEnv("IMAGE_RESIZE_POLICY", "smart-cover"), []string{"fit", "cover-center", "smart-cover"}, "smart-cover"),
+		},
 		Pinning: PinningConfig{
 			Retries:      getEnvInt("PINNING_RETRIES", 3),
 			RetryDelayMs: getEnvInt("PINNING_RETRY_DELAY_MS", 1000),
@@ -161,8 +187,8 @@ func Load() *Config {
 			AspectRatioTolerance: getEnvFloat("VIDEO_ASPECT_RATIO_TOLERANCE", 0.1),
 			SegmentDurationSec:   getEnvInt("VIDEO_SEGMENT_DURATION_SEC", 4),
 			Bitrates:             getEnvSlice("VIDEO_BITRATES", []string{"500k", "1500k", "4000k"}),
-			FFmpegPath:           validateBinaryName(getEnv("FFMPEG_PATH", "ffmpeg")),
-			FFprobePath:          validateBinaryName(getEnv("FFPROBE_PATH", "ffprobe")),
+			FFmpegPath:           validateBinaryPath(getEnv("FFMPEG_PATH", "ffmpeg"), "ffmpeg"),
+			FFprobePath:          validateBinaryPath(getEnv("FFPROBE_PATH", "ffprobe"), "ffprobe"),
 			TempDir:              getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
 		},
 		Auth: AuthConfig{
@@ -178,11 +204,11 @@ func Load() *Config {
 	}
 }
 
-// validateBinaryName ensures the path is just a binary name (no slashes, no path traversal).
-func validateBinaryName(path string) string {
-	if strings.Contains(path, "/") || strings.Contains(path, "..") {
-		fmt.Fprintf(os.Stderr, "[WARN] Invalid binary path %q — must be a bare name (e.g. 'ffmpeg'). Using default.\n", path)
-		return "ffmpeg"
+// validateBinaryPath accepts a binary name or an absolute path, but rejects traversal.
+func validateBinaryPath(path string, def string) string {
+	if path == "" || strings.Contains(path, "..") {
+		fmt.Fprintf(os.Stderr, "[WARN] Invalid binary path %q. Using default %q.\n", path, def)
+		return def
 	}
 	return path
 }
@@ -209,6 +235,59 @@ func getEnvSlice(key string, def []string) []string {
 		}
 	}
 	return result
+}
+
+func getEnvImageVariants(key string, def []ImageVariant) []ImageVariant {
+	parts := getEnvSlice(key, nil)
+	if len(parts) == 0 {
+		return def
+	}
+	var variants []ImageVariant
+	for _, part := range parts {
+		wh := strings.Split(strings.ToLower(strings.TrimSpace(part)), "x")
+		if len(wh) != 2 {
+			return def
+		}
+		w, errW := strconv.Atoi(wh[0])
+		h, errH := strconv.Atoi(wh[1])
+		if errW != nil || errH != nil || w <= 0 || h <= 0 {
+			return def
+		}
+		variants = append(variants, ImageVariant{Key: fmt.Sprintf("%dx%d", w, h), Width: w, Height: h})
+	}
+	return variants
+}
+
+func validateChoice(value string, allowed []string, def string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, item := range allowed {
+		if value == item {
+			return value
+		}
+	}
+	return def
+}
+
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func getEnvBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }
 
 func getEnvInt(key string, def int) int {
