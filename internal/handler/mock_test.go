@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 type mockCluster struct {
 	mu       sync.Mutex
 	files    map[string][]byte // CID -> content
+	dirs     map[string]map[string][]byte
 	pinned   map[string]bool   // CID -> pinned
 	nodeAddr map[string]string // CID -> node URL
 }
@@ -24,9 +26,27 @@ type mockCluster struct {
 func newMockCluster() ipfs.Clusterer {
 	return &mockCluster{
 		files:    make(map[string][]byte),
+		dirs:     make(map[string]map[string][]byte),
 		pinned:   make(map[string]bool),
 		nodeAddr: make(map[string]string),
 	}
+}
+
+func (m *mockCluster) ClusterAddDir(ctx context.Context, entries map[string][]byte) (*ipfs.AddResult, error) {
+	var combined []byte
+	for name, data := range entries {
+		combined = append(combined, []byte(name)...)
+		combined = append(combined, data...)
+	}
+	cid := fmt.Sprintf("Qm%s", mockHash(combined))
+	copied := make(map[string][]byte, len(entries))
+	for name, data := range entries {
+		copied[name] = append([]byte(nil), data...)
+	}
+	m.mu.Lock()
+	m.dirs[cid] = copied
+	m.mu.Unlock()
+	return &ipfs.AddResult{CID: cid, Name: ""}, nil
 }
 
 func (m *mockCluster) ClusterAdd(ctx context.Context, filename string, r io.Reader) (*ipfs.AddResult, error) {
@@ -72,6 +92,21 @@ func (m *mockCluster) ClusterTryFetch(ctx context.Context, cid string) (io.ReadC
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
+func (m *mockCluster) ClusterTryFetchPath(ctx context.Context, cid string, filePath string) (io.ReadCloser, error) {
+	m.mu.Lock()
+	dir, ok := m.dirs[cid]
+	if !ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("directory not found")
+	}
+	data, ok := dir[filePath]
+	m.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("file not found")
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
 func (m *mockCluster) ClusterUnpinAll(ctx context.Context, cid string) error {
 	m.mu.Lock()
 	delete(m.pinned, cid)
@@ -98,7 +133,11 @@ func mockHash(data []byte) string {
 	hashMu.Lock()
 	defer hashMu.Unlock()
 	hashCounter++
-	return fmt.Sprintf("mock%d%x", hashCounter, len(data))
+	raw := fmt.Sprintf("mock%d%x", hashCounter, len(data))
+	if len(raw) < 44 {
+		raw += strings.Repeat("a", 44-len(raw))
+	}
+	return raw[:44]
 }
 
 // Создаёт тестовый handler с mock cluster

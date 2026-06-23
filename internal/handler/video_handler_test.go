@@ -8,11 +8,25 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 )
+
+var (
+	testMasterCID   = testCID("Master")
+	testLowCID      = testCID("Low")
+	testMissingCID  = testCID("Missing")
+	testDeletedCID  = testCID("Deleted")
+	testSegmentCID  = testCID("Segment")
+	testPlaylistCID = testCID("Playlist")
+)
+
+func testCID(seed string) string {
+	return "Qm" + seed + strings.Repeat("1", 44-len(seed))
+}
 
 func setupVideoTestHandler(t *testing.T, cfg *config.Config) *Handler {
 	t.Helper()
@@ -36,10 +50,10 @@ func TestHandleStreamMaster(t *testing.T) {
 	h := setupVideoTestHandler(t, cfg)
 	cluster := h.cluster.(*mockCluster)
 
-	masterContent := "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\nQmLow\n"
-	cluster.files["QmMasterTest"] = []byte(masterContent)
+	masterContent := "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\n" + testLowCID + "\n"
+	cluster.files[testMasterCID] = []byte(masterContent)
 
-	req := httptest.NewRequest(http.MethodGet, "/stream/QmMasterTest/master.m3u8", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stream/"+testMasterCID+"/master.m3u8", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamMaster(w, req)
 
@@ -58,7 +72,7 @@ func TestHandleStreamMasterNotFound(t *testing.T) {
 	}
 	h := setupVideoTestHandler(t, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/stream/QmNonExistent/master.m3u8", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stream/"+testMissingCID+"/master.m3u8", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamMaster(w, req)
 
@@ -89,9 +103,9 @@ func TestHandleStreamMasterDeletedVideo(t *testing.T) {
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupVideoTestHandler(t, cfg)
-	h.unpinStore.Add("QmDeleted")
+	h.unpinStore.Add(testDeletedCID)
 
-	req := httptest.NewRequest(http.MethodGet, "/stream/QmDeleted/master.m3u8", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stream/"+testDeletedCID+"/master.m3u8", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamMaster(w, req)
 
@@ -109,9 +123,9 @@ func TestHandleStreamSegment(t *testing.T) {
 	cluster := h.cluster.(*mockCluster)
 
 	segmentData := []byte("fake-m4s-segment-data")
-	cluster.files["QmSegTest"] = segmentData
+	cluster.files[testSegmentCID] = segmentData
 
-	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmSegTest.m4s", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stream/segment/"+testSegmentCID+".m4s", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamSegment(w, req)
 
@@ -135,9 +149,9 @@ func TestHandleStreamSegmentPlaylist(t *testing.T) {
 	cluster := h.cluster.(*mockCluster)
 
 	playlistData := []byte("#EXTM3U\n#EXTINF:4,\nQmSeg1.m4s\n")
-	cluster.files["QmPlaylistTest"] = playlistData
+	cluster.files[testPlaylistCID] = playlistData
 
-	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmPlaylistTest.m3u8", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stream/segment/"+testPlaylistCID+".m3u8", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamSegment(w, req)
 
@@ -172,7 +186,7 @@ func TestHandleStreamSegmentNotFound(t *testing.T) {
 	}
 	h := setupVideoTestHandler(t, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmNonExistent.m4s", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stream/segment/"+testMissingCID+".m4s", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamSegment(w, req)
 
@@ -187,9 +201,9 @@ func TestHandleStreamSegmentDeleted(t *testing.T) {
 		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
 	}
 	h := setupVideoTestHandler(t, cfg)
-	h.unpinStore.Add("QmDeletedSeg")
+	h.unpinStore.Add(testDeletedCID)
 
-	req := httptest.NewRequest(http.MethodGet, "/stream/segment/QmDeletedSeg.m4s", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stream/segment/"+testDeletedCID+".m4s", nil)
 	w := httptest.NewRecorder()
 	h.HandleStreamSegment(w, req)
 
@@ -267,8 +281,8 @@ func TestHandleUploadVideoTooLarge(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleUploadVideo(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want 400 for file too large", w.Code)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("Status = %d, want 413 for file too large", w.Code)
 	}
 
 	var resp map[string]string

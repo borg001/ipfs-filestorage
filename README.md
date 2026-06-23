@@ -185,9 +185,11 @@ end
 
 - 📤 Загрузка одного файла — `POST /upload`
 - 📦 Массовая загрузка — `POST /upload-multiple`
+- 🖼 Image bundles — оригинал + настроенные размеры (`/file/{cid}/{size}`) с metadata manifest
 - 🎬 Видео-стриминг — `POST /upload-video` → адаптивный HLS (3 качества)
 - 📺 Воспроизведение — `GET /stream/{cid}/master.m3u8`
 - 📥 Скачивание по CID — `GET /file/{cid}`
+- ⚙️ Публичная конфигурация возможностей — `GET /config`
 - 🗑 Мягкое удаление — `DELETE /file/{cid}` (unpin + TTL)
 - 🔄 Кластерная репликация — автоматический Fetch+Pin на все ноды
 - 🔐 Аутентификация — статические API-ключи + опциональный Lua-скрипт
@@ -233,7 +235,7 @@ curl -s -X POST http://localhost:3001/upload \
   -H "X-API-Key: SECRET_KEY_1" \
   -F "file=@test.json;type=application/json" | jq .
 
-# Ответ: {"cid":"QmXyZ...","name":"test.json","size":42,"pinned":true}
+# Ответ: {"cid":"QmXyZ...","name":"test.json","size":42,"pinned":true,"type":"file",...}
 
 # Прочитать тот же CID через storage2
 curl -s http://localhost:3002/file/QmXyZ... \
@@ -307,6 +309,18 @@ docker compose up --build -d
 | `CORS_ALLOWED_ORIGINS` | `*` | Разрешённые origins |
 | `CORS_ALLOWED_HEADERS` | `Origin,X-Requested-With,Content-Type,Accept,X-API-Key,Authorization` | Разрешённые заголовки |
 
+### Параметры image bundle
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `IMAGE_PROCESSING_ENABLED` | `true` | Генерировать image variants при загрузке raster image |
+| `IMAGE_VARIANTS` | `100x100,320x320,640x640,1024x1024` | Размеры вариантов через запятую |
+| `IMAGE_OUTPUT_FORMAT` | `auto` | `auto`, `jpeg` или `webp`. В `auto` PNG/WebP variants пишутся в WebP, остальные в JPEG |
+| `IMAGE_JPEG_PROGRESSIVE` | `true` | Писать JPEG variants как progressive JPEG через ffmpeg |
+| `IMAGE_JPEG_QUALITY` | `82` | Качество JPEG variants, 1-100 |
+| `IMAGE_WEBP_QUALITY` | `82` | Качество WebP variants, 1-100 |
+| `IMAGE_RESIZE_POLICY` | `smart-cover` | `fit`, `cover-center`, `smart-cover`. Сейчас `smart-cover` использует center cover и оставлен как точка расширения под face/saliency crop |
+
 ### Параметры видео
 
 | Переменная | По умолчанию | Описание |
@@ -330,7 +344,29 @@ docker compose up --build -d
 
 ## API
 
-Все эндпоинты требуют аутентификацию: заголовок `Authorization: Bearer <token>`, `X-API-Key: <key>` или query-параметр `?token=<token>` / `?access_token=<token>` для браузерных media-запросов.
+Все эндпоинты, кроме публичного `GET /config`, требуют аутентификацию: заголовок `Authorization: Bearer <token>`, `X-API-Key: <key>` или query-параметр `?token=<token>` / `?access_token=<token>` для браузерных media-запросов.
+
+### Публичная конфигурация
+
+```http
+GET /config
+```
+
+Возвращает публичные возможности сервиса. Сейчас содержит секцию `image`, по которой клиенты могут понять доступные размеры и шаблоны URL.
+
+```json
+{
+  "image": {
+    "enabled": true,
+    "variants": [{"key": "100x100", "width": 100, "height": 100}],
+    "output_format": "auto",
+    "jpeg_progressive": true,
+    "resize_policy": "smart-cover",
+    "url_template": "/file/{cid}/{size}",
+    "bundle_template": "/file/{cid}/bundle"
+  }
+}
+```
 
 ### Загрузка файла
 
@@ -346,13 +382,36 @@ Authorization: Bearer SECRET_KEY_1
 ```json
 {
   "cid": "QmXyZ...",
-  "name": "document.pdf",
+  "name": "avatar.png",
   "size": 245760,
-  "pinned": true
+  "pinned": true,
+  "type": "image",
+  "original": {
+    "path": "/file/QmXyZ...",
+    "bundle_path": "original",
+    "format": "png",
+    "content_type": "image/png",
+    "width": 1200,
+    "height": 900,
+    "size": 245760
+  },
+  "variants": {
+    "100x100": {
+      "path": "/file/QmXyZ.../100x100",
+      "bundle_path": "100x100.webp",
+      "format": "webp",
+      "content_type": "image/webp",
+      "width": 100,
+      "height": 100,
+      "size": 8920
+    }
+  }
 }
 ```
 
 Размер в ответе — реальный размер прочитанных сервером байтов, а не заголовок от клиента.
+
+`cid` в ответе — это root CID bundle-директории. Для любых типов файлов внутри bundle хранится `original` и `manifest.json`. Для изображений дополнительно сохраняются настроенные variants.
 
 ### Массовая загрузка
 
@@ -415,7 +474,21 @@ GET /file/{cid}
 Authorization: Bearer SECRET_KEY_1
 ```
 
-Возвращает бинарное содержимое с корректным `Content-Type`.
+Возвращает оригинальный файл из bundle с корректным `Content-Type`.
+
+```http
+GET /file/{cid}/bundle
+Authorization: Bearer SECRET_KEY_1
+```
+
+Возвращает manifest bundle. Его можно получить повторно по root CID, поэтому клиентам не обязательно хранить весь JSON ответа загрузки.
+
+```http
+GET /file/{cid}/{size}
+Authorization: Bearer SECRET_KEY_1
+```
+
+Возвращает image variant, например `/file/{cid}/100x100`. Если variant не был сгенерирован, вернётся `404`.
 
 ### Удаление файла (мягкое)
 

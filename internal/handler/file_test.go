@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,11 +11,12 @@ import (
 
 func TestHandleFile_DetectsContentType(t *testing.T) {
 	h := setupTestHandler(&config.Config{})
-	cid := "Qm11111111111111111111111111111111111111111111"
-	cluster := h.cluster.(*mockCluster)
-	cluster.files[cid] = []byte("hello from storage")
+	manifest, err := h.buildFileBundle(context.Background(), "hello.txt", []byte("hello from storage"), "text/plain; charset=utf-8")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/file/"+cid, nil)
+	req := httptest.NewRequest(http.MethodGet, "/file/"+manifest.CID, nil)
 	w := httptest.NewRecorder()
 	h.HandleFile(w, req)
 

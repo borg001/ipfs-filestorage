@@ -52,6 +52,7 @@ func main() {
 	mux.HandleFunc("POST /upload-multiple", handlers.HandleUploadMultiple)
 	mux.HandleFunc("GET /file/", handlers.HandleFile)
 	mux.HandleFunc("DELETE /file/", handlers.HandleDelete)
+	mux.HandleFunc("GET /config", handlers.HandleConfig)
 
 	// Video streaming handlers
 	mux.HandleFunc("POST /upload-video", handlers.HandleUploadVideo)
