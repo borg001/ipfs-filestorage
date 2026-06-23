@@ -106,17 +106,28 @@ func (p *Processor) encode(ctx context.Context, img image.Image, format string) 
 	if format == "webp" {
 		return p.encodeWithFFmpeg(ctx, img, "webp")
 	}
-	if p.cfg.JPEGProgressive {
-		if data, err := p.encodeWithFFmpeg(ctx, img, "jpeg"); err == nil {
-			return data, nil
-		}
-	}
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: p.cfg.JPEGQuality}); err != nil {
 		return nil, err
 	}
+	if p.cfg.JPEGProgressive {
+		return encodeProgressiveJPEG(ctx, buf.Bytes())
+	}
 	return buf.Bytes(), nil
+}
+
+func encodeProgressiveJPEG(ctx context.Context, baseline []byte) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "jpegtran", "-progressive", "-copy", "none", "-optimize")
+	cmd.Stdin = bytes.NewReader(baseline)
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("jpegtran failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return out.Bytes(), nil
 }
 
 func (p *Processor) encodeWithFFmpeg(ctx context.Context, img image.Image, format string) ([]byte, error) {
@@ -133,8 +144,6 @@ func (p *Processor) encodeWithFFmpeg(ctx context.Context, img image.Image, forma
 	switch format {
 	case "webp":
 		args = append(args, "-f", "image2pipe", "-vcodec", "libwebp", "-quality", fmt.Sprintf("%d", p.cfg.WebPQuality), "pipe:1")
-	case "jpeg":
-		args = append(args, "-progressive", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", jpegQScale(p.cfg.JPEGQuality), "pipe:1")
 	default:
 		return nil, fmt.Errorf("unsupported output format %q", format)
 	}
@@ -213,10 +222,4 @@ func extension(format string) string {
 		return "jpg"
 	}
 	return format
-}
-
-func jpegQScale(quality int) string {
-	quality = max(1, min(100, quality))
-	scale := 31 - int(math.Round(float64(quality)*30.0/100.0))
-	return fmt.Sprintf("%d", max(2, min(31, scale)))
 }
