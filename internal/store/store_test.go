@@ -34,7 +34,7 @@ func TestConcurrentAccess(t *testing.T) {
 	all := s.All()
 	if len(all) != goroutines*cidsPerGoroutine {
 		t.Errorf("Expected %d entries after concurrent writes, got %d",
-				goroutines*cidsPerGoroutine, len(all))
+			goroutines*cidsPerGoroutine, len(all))
 	}
 }
 
@@ -102,6 +102,30 @@ func TestAddGroup(t *testing.T) {
 	for _, cid := range allCIDs {
 		if !s.Has(cid) {
 			t.Errorf("Has(%q) = false, expected true after AddGroup", cid)
+		}
+	}
+
+	group := s.GetGroup(masterCID)
+	if len(group) != len(allCIDs) {
+		t.Errorf("GetGroup returned %d CIDs, want %d", len(group), len(allCIDs))
+	}
+}
+
+func TestTrackGroupDoesNotMarkDeleted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test-store.json")
+	s, err := NewUnpinStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	masterCID := "QmMasterTracked"
+	allCIDs := []string{"QmMasterTracked", "QmLowTracked", "QmHighTracked"}
+
+	s.TrackGroup(masterCID, allCIDs)
+
+	for _, cid := range allCIDs {
+		if s.Has(cid) {
+			t.Errorf("Has(%q) = true after TrackGroup, want false", cid)
 		}
 	}
 

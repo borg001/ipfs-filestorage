@@ -171,6 +171,33 @@ func TestRewriteVariantPlaylistCIDSubstitution(t *testing.T) {
 	}
 }
 
+func TestRewriteVariantPlaylistInitMapSubstitution(t *testing.T) {
+	outputDir := t.TempDir()
+	lowDir := filepath.Join(outputDir, "low")
+	os.MkdirAll(lowDir, 0755)
+
+	playlist := "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4.000,\nseg_0.m4s\n#EXT-X-ENDLIST\n"
+	os.WriteFile(filepath.Join(lowDir, "playlist.m3u8"), []byte(playlist), 0644)
+
+	fileCIDs := map[string]string{
+		"low/init.mp4":  "QmInit",
+		"low/seg_0.m4s": "QmSeg0",
+	}
+
+	u := NewUploader(nil)
+	result, err := u.rewriteVariantPlaylist(outputDir, "low/playlist.m3u8", fileCIDs)
+	if err != nil {
+		t.Fatalf("rewriteVariantPlaylist failed: %v", err)
+	}
+
+	if !strings.Contains(result, "#EXT-X-MAP:URI=\"QmInit.mp4\"") {
+		t.Error("Rewritten playlist should replace init map with CID")
+	}
+	if strings.Contains(result, "URI=\"init.mp4\"") {
+		t.Error("Rewritten playlist should NOT contain original init.mp4 URI")
+	}
+}
+
 func TestRewriteVariantPlaylistMissingSegment(t *testing.T) {
 	outputDir := t.TempDir()
 	lowDir := filepath.Join(outputDir, "low")
@@ -229,6 +256,12 @@ func TestBuildMasterPlaylistOrder(t *testing.T) {
 	}
 	if !strings.Contains(content, "BANDWIDTH=4000000") {
 		t.Error("Missing high bandwidth")
+	}
+	if !strings.Contains(content, "../segment/QmLow.m3u8") {
+		t.Error("low variant URL should point to m3u8 playlist")
+	}
+	if strings.Contains(content, "../segment/QmLow\n") {
+		t.Error("variant URL should not omit m3u8 extension")
 	}
 }
 

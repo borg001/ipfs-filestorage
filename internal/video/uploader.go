@@ -140,6 +140,13 @@ func (u *Uploader) rewriteVariantPlaylist(outputDir, relPath string, fileCIDs ma
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#EXT-X-MAP:") {
+			initRelPath := filepath.Join(variantDir, "init.mp4")
+			if cid, ok := fileCIDs[initRelPath]; ok {
+				result.WriteString(strings.Replace(line, `URI="init.mp4"`, fmt.Sprintf(`URI="%s.mp4"`, cid), 1) + "\n")
+				continue
+			}
+		}
 		if strings.HasPrefix(trimmed, "seg_") && strings.HasSuffix(trimmed, ".m4s") {
 			segRelPath := filepath.Join(variantDir, trimmed)
 			if cid, ok := fileCIDs[segRelPath]; ok {
@@ -178,7 +185,7 @@ func (u *Uploader) buildMasterPlaylist(variantCIDs map[string]string, fileCIDs m
 		bw := bandwidth[name]
 		res := resolution[name]
 		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%s,CODECS=\"avc1.42e01e\"\n", bw, res))
-		b.WriteString(fmt.Sprintf("/stream/segment/%s\n", cid))
+		b.WriteString(fmt.Sprintf("../segment/%s.m3u8\n", cid))
 	}
 
 	return b.String(), nil

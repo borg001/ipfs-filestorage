@@ -51,6 +51,12 @@ func (t *Transcoder) Transcode(ctx context.Context, inputPath, outputDir string)
 
 	// Строим ffmpeg-аргументы для multi-variant HLS
 	args := t.buildHLSArgs(inputPath, outputDir)
+	for _, br := range t.cfg.Bitrates {
+		variantDir := filepath.Join(outputDir, bitrateToName(br))
+		if err := os.MkdirAll(variantDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create variant dir %s: %w", variantDir, err)
+		}
+	}
 
 	cmd := exec.CommandContext(ctx, t.cfg.FFmpegPath, args...)
 	output, err := cmd.CombinedOutput()
