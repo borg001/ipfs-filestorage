@@ -200,10 +200,7 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	contentType := "video/mp4"
-	if strings.HasSuffix(path, ".m3u8") {
-		contentType = "application/vnd.apple.mpegurl"
-	}
+	contentType := streamSegmentContentType(path)
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -213,6 +210,21 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	io.Copy(w, reader)
+}
+
+func streamSegmentContentType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".m3u8":
+		return "application/vnd.apple.mpegurl"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "video/mp4"
+	}
 }
 
 func (h *Handler) fetchVideoAsset(ctx context.Context, cid string) (io.ReadCloser, error) {
@@ -258,7 +270,7 @@ func appendPlaylistAuth(content, authSuffix string) string {
 		if trimmed == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "#EXT-X-MAP:") {
+		if strings.HasPrefix(trimmed, "#") && strings.Contains(trimmed, `URI="`) {
 			lines[i] = appendURIAuth(line, authSuffix)
 			continue
 		}

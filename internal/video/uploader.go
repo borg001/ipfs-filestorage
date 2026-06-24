@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
@@ -22,6 +23,7 @@ type UploadResult struct {
 	MasterCID   string            `json:"master_cid"`
 	VariantCIDs map[string]string `json:"variant_cids"`
 	SegmentCIDs map[string]string `json:"segment_cids"`
+	PosterCIDs  map[string]string `json:"poster_cids"`
 	AllCIDs     []string          `json:"all_cids"`
 }
 
@@ -40,6 +42,7 @@ func (u *Uploader) UploadDir(ctx context.Context, outputDir string) (*UploadResu
 	result := &UploadResult{
 		VariantCIDs: make(map[string]string),
 		SegmentCIDs: make(map[string]string),
+		PosterCIDs:  make(map[string]string),
 	}
 
 	if u.adder == nil {
@@ -120,6 +123,9 @@ func (u *Uploader) UploadDir(ctx context.Context, outputDir string) (*UploadResu
 		if strings.HasSuffix(relPath, ".m4s") {
 			result.SegmentCIDs[relPath] = cid
 		}
+		if size, ok := posterSizeFromPath(relPath); ok {
+			result.PosterCIDs[size] = cid
+		}
 	}
 
 	return result, nil
@@ -165,6 +171,10 @@ func (u *Uploader) buildMasterPlaylist(variantCIDs map[string]string, fileCIDs m
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
 
+	for _, poster := range collectPosters(fileCIDs) {
+		b.WriteString(fmt.Sprintf("#EXT-X-IAMFREE-POSTER:SIZE=%s,URI=\"../segment/%s.jpg\"\n", poster.size, poster.cid))
+	}
+
 	order := []string{"low", "medium", "high"}
 	bandwidth := map[string]int{
 		"low":    500000,
@@ -189,6 +199,49 @@ func (u *Uploader) buildMasterPlaylist(variantCIDs map[string]string, fileCIDs m
 	}
 
 	return b.String(), nil
+}
+
+type posterEntry struct {
+	size string
+	cid  string
+}
+
+func collectPosters(fileCIDs map[string]string) []posterEntry {
+	if len(fileCIDs) == 0 {
+		return nil
+	}
+	posters := make([]posterEntry, 0)
+	for relPath, cid := range fileCIDs {
+		size, ok := posterSizeFromPath(relPath)
+		if !ok {
+			continue
+		}
+		posters = append(posters, posterEntry{size: size, cid: cid})
+	}
+	sort.Slice(posters, func(i, j int) bool {
+		return posterArea(posters[i].size) < posterArea(posters[j].size)
+	})
+	return posters
+}
+
+func posterSizeFromPath(relPath string) (string, bool) {
+	relPath = filepath.ToSlash(relPath)
+	if !strings.HasPrefix(relPath, "posters/") || !strings.HasSuffix(strings.ToLower(relPath), ".jpg") {
+		return "", false
+	}
+	size := strings.TrimSuffix(strings.TrimPrefix(relPath, "posters/"), filepath.Ext(relPath))
+	if size == "" {
+		return "", false
+	}
+	return size, true
+}
+
+func posterArea(size string) int {
+	var width, height int
+	if _, err := fmt.Sscanf(size, "%dx%d", &width, &height); err != nil {
+		return 0
+	}
+	return width * height
 }
 
 // reuploadContent загружает строку как файл в IPFS

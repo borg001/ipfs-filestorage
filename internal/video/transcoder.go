@@ -49,6 +49,10 @@ func (t *Transcoder) Transcode(ctx context.Context, inputPath, outputDir string)
 		return nil, fmt.Errorf("video duration %.1fs exceeds max %ds", duration, t.cfg.MaxDurationSec)
 	}
 
+	if err := t.generateThumbnails(ctx, inputPath, outputDir); err != nil {
+		return nil, fmt.Errorf("generate thumbnails: %w", err)
+	}
+
 	// Строим ffmpeg-аргументы для multi-variant HLS
 	args := t.buildHLSArgs(inputPath, outputDir)
 	for _, br := range t.cfg.Bitrates {
@@ -116,6 +120,54 @@ func (t *Transcoder) buildHLSArgs(inputPath, outputDir string) []string {
 	}
 
 	return args
+}
+
+func (t *Transcoder) generateThumbnails(ctx context.Context, inputPath, outputDir string) error {
+	if len(t.cfg.ThumbnailVariants) == 0 {
+		return nil
+	}
+	postersDir := filepath.Join(outputDir, "posters")
+	if err := os.MkdirAll(postersDir, 0o755); err != nil {
+		return fmt.Errorf("create posters dir: %w", err)
+	}
+	for _, variant := range t.cfg.ThumbnailVariants {
+		if variant.Width <= 0 || variant.Height <= 0 {
+			continue
+		}
+		outputPath := filepath.Join(postersDir, thumbnailFilename(variant))
+		args := t.buildThumbnailArgs(inputPath, outputPath, variant)
+		cmd := exec.CommandContext(ctx, t.cfg.FFmpegPath, args...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("ffmpeg thumbnail %s failed: %w\noutput: %s", variant.Key, err, string(output))
+		}
+	}
+	return nil
+}
+
+func (t *Transcoder) buildThumbnailArgs(inputPath, outputPath string, variant config.ImageVariant) []string {
+	size := fmt.Sprintf("%d:%d", variant.Width, variant.Height)
+	filter := fmt.Sprintf("scale=%s:force_original_aspect_ratio=increase,crop=%s", size, size)
+	seek := fmt.Sprintf("%.3f", t.cfg.ThumbnailTimeSec)
+	qscale := fmt.Sprintf("%d", t.cfg.ThumbnailQScale)
+	return []string{
+		"-ss", seek,
+		"-i", inputPath,
+		"-frames:v", "1",
+		"-vf", filter,
+		"-q:v", qscale,
+		"-y",
+		outputPath,
+	}
+}
+
+func thumbnailFilename(variant config.ImageVariant) string {
+	key := strings.TrimSpace(variant.Key)
+	if key == "" {
+		key = fmt.Sprintf("%dx%d", variant.Width, variant.Height)
+	}
+	key = strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_").Replace(key)
+	return key + ".jpg"
 }
 
 // probeDuration возвращает длительность видео через ffprobe.
