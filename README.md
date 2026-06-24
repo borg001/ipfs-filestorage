@@ -344,7 +344,7 @@ docker compose up --build -d
 
 ## API
 
-Все эндпоинты, кроме публичного `GET /config`, требуют аутентификацию: заголовок `Authorization: Bearer <token>`, `X-API-Key: <key>`, cookie `iamfree_auth_token` для браузерных media-запросов или legacy query-параметр `?token=<token>` / `?access_token=<token>`.
+Все эндпоинты, кроме публичного `GET /config`, требуют аутентификацию: заголовок `Authorization: Bearer <token>`, `X-API-Key: <key>` или query-параметр `?token=<token>` / `?access_token=<token>` для браузерных media-запросов.
 
 ### Публичная конфигурация
 
