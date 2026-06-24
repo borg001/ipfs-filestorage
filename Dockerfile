@@ -12,11 +12,12 @@ RUN go mod tidy && go build -o /bin/server ./cmd/server/
 
 FROM debian:bookworm-slim
 
-# ffmpeg для видеотранскодирования
+# ffmpeg для видеотранскодирования, jpegtran для progressive JPEG variants.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       ffmpeg \
+      libjpeg-turbo-progs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

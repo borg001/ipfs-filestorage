@@ -159,7 +159,14 @@ func Load() *Config {
 		},
 		Image: ImageConfig{
 			ProcessingEnabled: getEnvBool("IMAGE_PROCESSING_ENABLED", true),
-			Variants:          getEnvImageVariants("IMAGE_VARIANTS", []ImageVariant{{Key: "100x100", Width: 100, Height: 100}, {Key: "320x320", Width: 320, Height: 320}, {Key: "640x640", Width: 640, Height: 640}, {Key: "1024x1024", Width: 1024, Height: 1024}}),
+			Variants: getEnvImageVariants("IMAGE_VARIANTS", []ImageVariant{
+				{Key: "100x100", Width: 100, Height: 100},
+				{Key: "320x320", Width: 320, Height: 320},
+				{Key: "480x640", Width: 480, Height: 640},
+				{Key: "640x640", Width: 640, Height: 640},
+				{Key: "768x1024", Width: 768, Height: 1024},
+				{Key: "1024x1024", Width: 1024, Height: 1024},
+			}),
 			OutputFormat:      validateChoice(getEnv("IMAGE_OUTPUT_FORMAT", "auto"), []string{"auto", "jpeg", "webp"}, "auto"),
 			JPEGProgressive:   getEnvBool("IMAGE_JPEG_PROGRESSIVE", true),
 			JPEGQuality:       clampInt(getEnvInt("IMAGE_JPEG_QUALITY", 82), 1, 100),

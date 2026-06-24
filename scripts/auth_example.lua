@@ -10,7 +10,6 @@ local env     = require("env")
 function authorize(req)
   -- Extract Bearer token from Authorization header
   local auth_header = req.headers["Authorization"]
-  if not auth_header then return false end
 
   -- Also accept X-API-Key as a token
   local token = auth_header
