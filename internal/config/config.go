@@ -97,6 +97,12 @@ type VideoConfig struct {
 	FFprobePath string
 	// Временная директория для обработки
 	TempDir string
+	// Размеры JPEG-превью, которые генерируются для видео.
+	ThumbnailVariants []ImageVariant
+	// Время кадра для превью (сек)
+	ThumbnailTimeSec float64
+	// JPEG qscale для ffmpeg (1 лучше, 31 хуже)
+	ThumbnailQScale int
 }
 
 // AuthConfig — настройки аутентификации.
@@ -167,11 +173,11 @@ func Load() *Config {
 				{Key: "768x1024", Width: 768, Height: 1024},
 				{Key: "1024x1024", Width: 1024, Height: 1024},
 			}),
-			OutputFormat:      validateChoice(getEnv("IMAGE_OUTPUT_FORMAT", "auto"), []string{"auto", "jpeg", "webp"}, "auto"),
-			JPEGProgressive:   getEnvBool("IMAGE_JPEG_PROGRESSIVE", true),
-			JPEGQuality:       clampInt(getEnvInt("IMAGE_JPEG_QUALITY", 82), 1, 100),
-			WebPQuality:       clampInt(getEnvInt("IMAGE_WEBP_QUALITY", 82), 1, 100),
-			ResizePolicy:      validateChoice(getEnv("IMAGE_RESIZE_POLICY", "smart-cover"), []string{"fit", "cover-center", "smart-cover"}, "smart-cover"),
+			OutputFormat:    validateChoice(getEnv("IMAGE_OUTPUT_FORMAT", "auto"), []string{"auto", "jpeg", "webp"}, "auto"),
+			JPEGProgressive: getEnvBool("IMAGE_JPEG_PROGRESSIVE", true),
+			JPEGQuality:     clampInt(getEnvInt("IMAGE_JPEG_QUALITY", 82), 1, 100),
+			WebPQuality:     clampInt(getEnvInt("IMAGE_WEBP_QUALITY", 82), 1, 100),
+			ResizePolicy:    validateChoice(getEnv("IMAGE_RESIZE_POLICY", "smart-cover"), []string{"fit", "cover-center", "smart-cover"}, "smart-cover"),
 		},
 		Pinning: PinningConfig{
 			Retries:      getEnvInt("PINNING_RETRIES", 3),
@@ -197,6 +203,13 @@ func Load() *Config {
 			FFmpegPath:           validateBinaryPath(getEnv("FFMPEG_PATH", "ffmpeg"), "ffmpeg"),
 			FFprobePath:          validateBinaryPath(getEnv("FFPROBE_PATH", "ffprobe"), "ffprobe"),
 			TempDir:              getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
+			ThumbnailVariants: getEnvImageVariants("VIDEO_THUMBNAIL_VARIANTS", []ImageVariant{
+				{Key: "180x320", Width: 180, Height: 320},
+				{Key: "360x640", Width: 360, Height: 640},
+				{Key: "720x1280", Width: 720, Height: 1280},
+			}),
+			ThumbnailTimeSec: getEnvFloat("VIDEO_THUMBNAIL_TIME_SEC", 1.0),
+			ThumbnailQScale:  clampInt(getEnvInt("VIDEO_THUMBNAIL_QSCALE", 3), 1, 31),
 		},
 		Auth: AuthConfig{
 			LuaScript:       getEnv("AUTH_LUA_SCRIPT", ""),

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
@@ -22,6 +23,7 @@ type UploadResult struct {
 	MasterCID   string            `json:"master_cid"`
 	VariantCIDs map[string]string `json:"variant_cids"`
 	SegmentCIDs map[string]string `json:"segment_cids"`
+	PosterCIDs  map[string]string `json:"poster_cids"`
 	AllCIDs     []string          `json:"all_cids"`
 }
 
@@ -40,6 +42,7 @@ func (u *Uploader) UploadDir(ctx context.Context, outputDir string) (*UploadResu
 	result := &UploadResult{
 		VariantCIDs: make(map[string]string),
 		SegmentCIDs: make(map[string]string),
+		PosterCIDs:  make(map[string]string),
 	}
 
 	if u.adder == nil {
@@ -120,6 +123,9 @@ func (u *Uploader) UploadDir(ctx context.Context, outputDir string) (*UploadResu
 		if strings.HasSuffix(relPath, ".m4s") {
 			result.SegmentCIDs[relPath] = cid
 		}
+		if size, ok := posterSizeFromPath(relPath); ok {
+			result.PosterCIDs[size] = cid
+		}
 	}
 
 	return result, nil
@@ -140,6 +146,13 @@ func (u *Uploader) rewriteVariantPlaylist(outputDir, relPath string, fileCIDs ma
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#EXT-X-MAP:") {
+			initRelPath := filepath.Join(variantDir, "init.mp4")
+			if cid, ok := fileCIDs[initRelPath]; ok {
+				result.WriteString(strings.Replace(line, `URI="init.mp4"`, fmt.Sprintf(`URI="%s.mp4"`, cid), 1) + "\n")
+				continue
+			}
+		}
 		if strings.HasPrefix(trimmed, "seg_") && strings.HasSuffix(trimmed, ".m4s") {
 			segRelPath := filepath.Join(variantDir, trimmed)
 			if cid, ok := fileCIDs[segRelPath]; ok {
@@ -157,6 +170,10 @@ func (u *Uploader) rewriteVariantPlaylist(outputDir, relPath string, fileCIDs ma
 func (u *Uploader) buildMasterPlaylist(variantCIDs map[string]string, fileCIDs map[string]string) (string, error) {
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
+
+	for _, poster := range collectPosters(fileCIDs) {
+		b.WriteString(fmt.Sprintf("#EXT-X-IAMFREE-POSTER:SIZE=%s,URI=\"../segment/%s.jpg\"\n", poster.size, poster.cid))
+	}
 
 	order := []string{"low", "medium", "high"}
 	bandwidth := map[string]int{
@@ -178,10 +195,53 @@ func (u *Uploader) buildMasterPlaylist(variantCIDs map[string]string, fileCIDs m
 		bw := bandwidth[name]
 		res := resolution[name]
 		b.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%s,CODECS=\"avc1.42e01e\"\n", bw, res))
-		b.WriteString(fmt.Sprintf("/stream/segment/%s\n", cid))
+		b.WriteString(fmt.Sprintf("../segment/%s.m3u8\n", cid))
 	}
 
 	return b.String(), nil
+}
+
+type posterEntry struct {
+	size string
+	cid  string
+}
+
+func collectPosters(fileCIDs map[string]string) []posterEntry {
+	if len(fileCIDs) == 0 {
+		return nil
+	}
+	posters := make([]posterEntry, 0)
+	for relPath, cid := range fileCIDs {
+		size, ok := posterSizeFromPath(relPath)
+		if !ok {
+			continue
+		}
+		posters = append(posters, posterEntry{size: size, cid: cid})
+	}
+	sort.Slice(posters, func(i, j int) bool {
+		return posterArea(posters[i].size) < posterArea(posters[j].size)
+	})
+	return posters
+}
+
+func posterSizeFromPath(relPath string) (string, bool) {
+	relPath = filepath.ToSlash(relPath)
+	if !strings.HasPrefix(relPath, "posters/") || !strings.HasSuffix(strings.ToLower(relPath), ".jpg") {
+		return "", false
+	}
+	size := strings.TrimSuffix(strings.TrimPrefix(relPath, "posters/"), filepath.Ext(relPath))
+	if size == "" {
+		return "", false
+	}
+	return size, true
+}
+
+func posterArea(size string) int {
+	var width, height int
+	if _, err := fmt.Sscanf(size, "%dx%d", &width, &height); err != nil {
+		return 0
+	}
+	return width * height
 }
 
 // reuploadContent загружает строку как файл в IPFS

@@ -67,10 +67,12 @@ func TestUploadDirWithFiles(t *testing.T) {
 	lowDir := filepath.Join(outputDir, "low")
 	medDir := filepath.Join(outputDir, "medium")
 	highDir := filepath.Join(outputDir, "high")
+	postersDir := filepath.Join(outputDir, "posters")
 
 	os.MkdirAll(lowDir, 0755)
 	os.MkdirAll(medDir, 0755)
 	os.MkdirAll(highDir, 0755)
+	os.MkdirAll(postersDir, 0755)
 
 	playlist := "#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:4.000,\nseg_0.m4s\n#EXT-X-ENDLIST\n"
 	os.WriteFile(filepath.Join(lowDir, "playlist.m3u8"), []byte(playlist), 0644)
@@ -79,6 +81,8 @@ func TestUploadDirWithFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(medDir, "seg_0.m4s"), []byte("fake-segment-data-med"), 0644)
 	os.WriteFile(filepath.Join(highDir, "playlist.m3u8"), []byte(playlist), 0644)
 	os.WriteFile(filepath.Join(highDir, "seg_0.m4s"), []byte("fake-segment-data-high"), 0644)
+	os.WriteFile(filepath.Join(postersDir, "180x320.jpg"), []byte("fake-poster-small"), 0644)
+	os.WriteFile(filepath.Join(postersDir, "720x1280.jpg"), []byte("fake-poster-large"), 0644)
 
 	adder := &mockAdder{}
 	u := NewUploader(adder)
@@ -98,6 +102,12 @@ func TestUploadDirWithFiles(t *testing.T) {
 	}
 	if len(result.SegmentCIDs) != 3 {
 		t.Errorf("Expected 3 segment CIDs, got %d", len(result.SegmentCIDs))
+	}
+	if len(result.PosterCIDs) != 2 {
+		t.Errorf("Expected 2 poster CIDs, got %d", len(result.PosterCIDs))
+	}
+	if result.PosterCIDs["180x320"] == "" {
+		t.Error("Expected 180x320 poster CID")
 	}
 	if adder.getCallCount() < 7 {
 		t.Errorf("Expected at least 7 Add calls, got %d", adder.getCallCount())
@@ -171,6 +181,33 @@ func TestRewriteVariantPlaylistCIDSubstitution(t *testing.T) {
 	}
 }
 
+func TestRewriteVariantPlaylistInitMapSubstitution(t *testing.T) {
+	outputDir := t.TempDir()
+	lowDir := filepath.Join(outputDir, "low")
+	os.MkdirAll(lowDir, 0755)
+
+	playlist := "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4.000,\nseg_0.m4s\n#EXT-X-ENDLIST\n"
+	os.WriteFile(filepath.Join(lowDir, "playlist.m3u8"), []byte(playlist), 0644)
+
+	fileCIDs := map[string]string{
+		"low/init.mp4":  "QmInit",
+		"low/seg_0.m4s": "QmSeg0",
+	}
+
+	u := NewUploader(nil)
+	result, err := u.rewriteVariantPlaylist(outputDir, "low/playlist.m3u8", fileCIDs)
+	if err != nil {
+		t.Fatalf("rewriteVariantPlaylist failed: %v", err)
+	}
+
+	if !strings.Contains(result, "#EXT-X-MAP:URI=\"QmInit.mp4\"") {
+		t.Error("Rewritten playlist should replace init map with CID")
+	}
+	if strings.Contains(result, "URI=\"init.mp4\"") {
+		t.Error("Rewritten playlist should NOT contain original init.mp4 URI")
+	}
+}
+
 func TestRewriteVariantPlaylistMissingSegment(t *testing.T) {
 	outputDir := t.TempDir()
 	lowDir := filepath.Join(outputDir, "low")
@@ -230,6 +267,12 @@ func TestBuildMasterPlaylistOrder(t *testing.T) {
 	if !strings.Contains(content, "BANDWIDTH=4000000") {
 		t.Error("Missing high bandwidth")
 	}
+	if !strings.Contains(content, "../segment/QmLow.m3u8") {
+		t.Error("low variant URL should point to m3u8 playlist")
+	}
+	if strings.Contains(content, "../segment/QmLow\n") {
+		t.Error("variant URL should not omit m3u8 extension")
+	}
 }
 
 func TestBuildMasterPlaylistMissingVariant(t *testing.T) {
@@ -252,6 +295,39 @@ func TestBuildMasterPlaylistMissingVariant(t *testing.T) {
 	}
 	if !strings.Contains(content, "QmHigh") {
 		t.Error("Should contain high variant")
+	}
+}
+
+func TestBuildMasterPlaylistPosters(t *testing.T) {
+	u := NewUploader(nil)
+	variantCIDs := map[string]string{
+		"low": "QmLow",
+	}
+	fileCIDs := map[string]string{
+		"posters/720x1280.jpg": "QmPosterLarge",
+		"posters/180x320.jpg":  "QmPosterSmall",
+		"low/seg_0.m4s":        "QmSeg",
+	}
+
+	content, err := u.buildMasterPlaylist(variantCIDs, fileCIDs)
+	if err != nil {
+		t.Fatalf("buildMasterPlaylist failed: %v", err)
+	}
+
+	smallIdx := strings.Index(content, `#EXT-X-IAMFREE-POSTER:SIZE=180x320,URI="../segment/QmPosterSmall.jpg"`)
+	largeIdx := strings.Index(content, `#EXT-X-IAMFREE-POSTER:SIZE=720x1280,URI="../segment/QmPosterLarge.jpg"`)
+	streamIdx := strings.Index(content, "#EXT-X-STREAM-INF")
+	if smallIdx < 0 {
+		t.Error("Missing small poster tag")
+	}
+	if largeIdx < 0 {
+		t.Error("Missing large poster tag")
+	}
+	if smallIdx >= largeIdx {
+		t.Error("Small poster should come before large poster")
+	}
+	if largeIdx >= streamIdx {
+		t.Error("Poster tags should come before stream variants")
 	}
 }
 

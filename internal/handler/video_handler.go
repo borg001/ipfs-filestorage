@@ -4,11 +4,13 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/borg001/ipfs-filestorage/internal/bundle"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 	"github.com/borg001/ipfs-filestorage/internal/video"
 )
@@ -53,6 +55,10 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Проверяем свободное место на диске (3x от максимального размера)
+	if err := os.MkdirAll(h.cfg.Video.TempDir, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Temp dir creation failed"})
+		return
+	}
 	if err := checkDiskSpace(h.cfg.Video.TempDir, h.cfg.Video.MaxSizeBytes*3); err != nil {
 		writeJSON(w, http.StatusInsufficientStorage, map[string]string{"error": err.Error()})
 		return
@@ -121,8 +127,8 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		_ = h.cluster.ClusterReplicate(ctx, cid, h.cfg.Pinning.Retries, retryDelay)
 	}
 
-	// Сохраняем маппинг master_cid → all_cids для группового удаления
-	h.unpinStore.AddGroup(uploadResult.MasterCID, uploadResult.AllCIDs)
+	// Сохраняем маппинг master_cid → all_cids для будущего группового удаления.
+	h.unpinStore.TrackGroup(uploadResult.MasterCID, uploadResult.AllCIDs)
 
 	resp := VideoResponse{
 		MasterCID:   uploadResult.MasterCID,
@@ -154,7 +160,7 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	reader, err := h.cluster.ClusterTryFetch(ctx, cid)
+	reader, err := h.fetchVideoAsset(ctx, cid)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Video not found"})
 		return
@@ -164,7 +170,7 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, reader)
+	writePlaylist(w, reader, playlistAuthSuffix(r.URL.Query()))
 }
 
 // HandleStreamSegment обрабатывает GET /stream/segment/{cid}.
@@ -187,20 +193,110 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	reader, err := h.cluster.ClusterTryFetch(ctx, cid)
+	reader, err := h.fetchVideoAsset(ctx, cid)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Segment not found"})
 		return
 	}
 	defer reader.Close()
 
-	contentType := "video/mp4"
-	if strings.HasSuffix(path, ".m3u8") {
-		contentType = "application/vnd.apple.mpegurl"
-	}
+	contentType := streamSegmentContentType(path)
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.WriteHeader(http.StatusOK)
+	if contentType == "application/vnd.apple.mpegurl" {
+		writePlaylist(w, reader, playlistAuthSuffix(r.URL.Query()))
+		return
+	}
 	io.Copy(w, reader)
+}
+
+func streamSegmentContentType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".m3u8":
+		return "application/vnd.apple.mpegurl"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "video/mp4"
+	}
+}
+
+func (h *Handler) fetchVideoAsset(ctx context.Context, cid string) (io.ReadCloser, error) {
+	reader, err := h.cluster.ClusterTryFetch(ctx, cid)
+	if err == nil {
+		return reader, nil
+	}
+	return h.cluster.ClusterTryFetchPath(ctx, cid, bundle.OriginalFilename)
+}
+
+func playlistAuthSuffix(query url.Values) string {
+	key := "token"
+	token := query.Get(key)
+	if token == "" {
+		key = "access_token"
+		token = query.Get(key)
+	}
+	if token == "" {
+		return ""
+	}
+	values := url.Values{}
+	values.Set(key, token)
+	return "?" + values.Encode()
+}
+
+func writePlaylist(w io.Writer, reader io.Reader, authSuffix string) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return
+	}
+	content := string(data)
+	if authSuffix == "" {
+		io.WriteString(w, content)
+		return
+	}
+	io.WriteString(w, appendPlaylistAuth(content, authSuffix))
+}
+
+func appendPlaylistAuth(content, authSuffix string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") && strings.Contains(trimmed, `URI="`) {
+			lines[i] = appendURIAuth(line, authSuffix)
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") || strings.Contains(trimmed, "?") {
+			continue
+		}
+		lines[i] = line + authSuffix
+	}
+	return strings.Join(lines, "\n")
+}
+
+func appendURIAuth(line, authSuffix string) string {
+	const marker = `URI="`
+	start := strings.Index(line, marker)
+	if start < 0 {
+		return line
+	}
+	start += len(marker)
+	end := strings.Index(line[start:], `"`)
+	if end < 0 {
+		return line
+	}
+	end += start
+	uri := line[start:end]
+	if strings.Contains(uri, "?") {
+		return line
+	}
+	return line[:start] + uri + authSuffix + line[end:]
 }

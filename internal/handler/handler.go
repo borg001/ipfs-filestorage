@@ -432,14 +432,22 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Добавляем в unpin-список (soft-delete)
-	h.unpinStore.Add(cid)
+	cidsToUnpin := []string{cid}
+	if group := h.unpinStore.GetGroup(cid); len(group) > 0 {
+		h.unpinStore.AddGroup(cid, group)
+		cidsToUnpin = group
+	} else {
+		h.unpinStore.Add(cid)
+	}
 
 	// Асинхронный unpin на всех нодах — используем detached context
 	// (request context отменяется когда клиент закрывает соединение)
 	go func() {
 		unpinCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		h.cluster.ClusterUnpinAll(unpinCtx, cid)
+		for _, unpinCID := range cidsToUnpin {
+			h.cluster.ClusterUnpinAll(unpinCtx, unpinCID)
+		}
 	}()
 
 	writeJSON(w, http.StatusOK, map[string]string{

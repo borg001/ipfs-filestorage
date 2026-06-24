@@ -195,6 +195,48 @@ func TestBuildHLSArgsSegmentFilenames(t *testing.T) {
 	}
 }
 
+func TestBuildThumbnailArgs(t *testing.T) {
+	cfg := &config.VideoConfig{
+		FFmpegPath:       "ffmpeg",
+		ThumbnailTimeSec: 1.25,
+		ThumbnailQScale:  4,
+	}
+	tr := NewTranscoder(cfg)
+	args := tr.buildThumbnailArgs("/tmp/input.mp4", "/tmp/posters/180x320.jpg", config.ImageVariant{
+		Key:    "180x320",
+		Width:  180,
+		Height: 320,
+	})
+	argsStr := strings.Join(args, " ")
+
+	if !strings.Contains(argsStr, "-ss 1.250") {
+		t.Error("Missing configured thumbnail seek time")
+	}
+	if !strings.Contains(argsStr, "-frames:v 1") {
+		t.Error("Missing single-frame extraction")
+	}
+	if !strings.Contains(argsStr, "scale=180:320:force_original_aspect_ratio=increase,crop=180:320") {
+		t.Error("Missing cover crop thumbnail filter")
+	}
+	if !strings.Contains(argsStr, "-q:v 4") {
+		t.Error("Missing configured JPEG qscale")
+	}
+	if args[len(args)-1] != "/tmp/posters/180x320.jpg" {
+		t.Errorf("Output path = %q, want /tmp/posters/180x320.jpg", args[len(args)-1])
+	}
+}
+
+func TestThumbnailFilename(t *testing.T) {
+	got := thumbnailFilename(config.ImageVariant{Key: "180x320", Width: 180, Height: 320})
+	if got != "180x320.jpg" {
+		t.Errorf("thumbnailFilename = %q, want 180x320.jpg", got)
+	}
+	got = thumbnailFilename(config.ImageVariant{Width: 360, Height: 640})
+	if got != "360x640.jpg" {
+		t.Errorf("thumbnailFilename fallback = %q, want 360x640.jpg", got)
+	}
+}
+
 func TestTranscodeMissingInput(t *testing.T) {
 	cfg := &config.VideoConfig{
 		SegmentDurationSec: 4,

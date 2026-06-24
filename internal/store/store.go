@@ -10,10 +10,10 @@ import (
 
 // UnpinStore хранит CID файлов, помеченных для удаления
 type UnpinStore struct {
-	mu       sync.RWMutex
-	path     string
-	entries  map[string]time.Time // CID → время пометки
-	groups   map[string][]string  // masterCID → все связанные CID
+	mu      sync.RWMutex
+	path    string
+	entries map[string]time.Time // CID → время пометки
+	groups  map[string][]string  // masterCID → все связанные CID
 }
 
 type Entry struct {
@@ -23,7 +23,7 @@ type Entry struct {
 
 func NewUnpinStore(path string) (*UnpinStore, error) {
 	s := &UnpinStore{
-		path:   path,
+		path:    path,
 		entries: make(map[string]time.Time),
 		groups:  make(map[string][]string),
 	}
@@ -54,11 +54,20 @@ func (s *UnpinStore) AddGroup(masterCID string, allCIDs []string) {
 	s.saveUnsafe()
 }
 
+// TrackGroup сохраняет связь master CID со связанными CID без пометки на удаление.
+func (s *UnpinStore) TrackGroup(masterCID string, allCIDs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copied := append([]string(nil), allCIDs...)
+	s.groups[masterCID] = copied
+	s.saveUnsafe()
+}
+
 // GetGroup возвращает все CID связанные с master CID.
 func (s *UnpinStore) GetGroup(masterCID string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.groups[masterCID]
+	return append([]string(nil), s.groups[masterCID]...)
 }
 
 func (s *UnpinStore) Has(cid string) bool {
@@ -118,7 +127,7 @@ func (s *UnpinStore) Load() error {
 	}
 
 	var raw struct {
-		Entries []Entry   `json:"entries"`
+		Entries []Entry             `json:"entries"`
 		Groups  map[string][]string `json:"groups"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -152,7 +161,7 @@ func (s *UnpinStore) Save() error {
 
 func (s *UnpinStore) saveUnsafe() error {
 	raw := struct {
-		Entries []Entry   `json:"entries"`
+		Entries []Entry             `json:"entries"`
 		Groups  map[string][]string `json:"groups"`
 	}{
 		Entries: make([]Entry, 0, len(s.entries)),
