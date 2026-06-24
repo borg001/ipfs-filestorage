@@ -314,7 +314,7 @@ docker compose up --build -d
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `IMAGE_PROCESSING_ENABLED` | `true` | Генерировать image variants при загрузке raster image |
-| `IMAGE_VARIANTS` | `100x100,320x320,640x640,1024x1024` | Размеры вариантов через запятую |
+| `IMAGE_VARIANTS` | `100x100,320x320,480x640,640x640,768x1024,1024x1024` | Размеры вариантов через запятую |
 | `IMAGE_OUTPUT_FORMAT` | `auto` | `auto`, `jpeg` или `webp`. В `auto` PNG/WebP variants пишутся в WebP, остальные в JPEG |
 | `IMAGE_JPEG_PROGRESSIVE` | `true` | Писать JPEG variants как progressive JPEG через ffmpeg |
 | `IMAGE_JPEG_QUALITY` | `82` | Качество JPEG variants, 1-100 |
