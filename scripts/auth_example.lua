@@ -7,6 +7,15 @@ local request = require("request")
 local json    = require("json")
 local env     = require("env")
 
+local function cookie_value(cookie_header, name)
+  if not cookie_header or cookie_header == "" then return nil end
+  for pair in string.gmatch(cookie_header, "([^;]+)") do
+    local key, value = string.match(pair, "^%s*([^=]+)=?(.*)$")
+    if key == name then return value end
+  end
+  return nil
+end
+
 function authorize(req)
   -- Extract Bearer token from Authorization header
   local auth_header = req.headers["Authorization"]
@@ -15,6 +24,12 @@ function authorize(req)
   local token = auth_header
   if not token or token == "" then
     token = req.headers["X-API-Key"]
+  end
+  if not token or token == "" then
+    local cookie_token = cookie_value(req.headers["Cookie"] or req.headers["cookie"], "iamfree_auth_token")
+    if cookie_token and cookie_token ~= "" then
+      token = "Bearer " .. cookie_token
+    end
   end
   if not token or token == "" then
     token = req.query["token"] or req.query["access_token"]
