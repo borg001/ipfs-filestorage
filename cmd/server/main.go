@@ -67,6 +67,7 @@ func main() {
 
 	wrapped := middleware.Chain(
 		mux,
+		middleware.CORS(cfg.CORS.AllowedOrigins, cfg.CORS.AllowedHeaders),
 		middleware.PanicRecovery(),
 		middleware.SecurityHeaders(),
 		middleware.RateLimit(middleware.RateLimitConfig{
@@ -74,7 +75,6 @@ func main() {
 			Burst: cfg.RateLimit.Burst,
 		}),
 		middleware.AuthMiddleware(cfg.API.Keys, luaProvider),
-		middleware.CORS(cfg.CORS.AllowedOrigins, cfg.CORS.AllowedHeaders),
 	)
 
 	port := os.Getenv("SERVER_PORT")
