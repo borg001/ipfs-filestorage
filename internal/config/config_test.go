@@ -135,8 +135,8 @@ func TestGetEnvSliceEmpty(t *testing.T) {
 	t.Setenv("API_KEYS", "")
 	cfg := Load()
 
-	if len(cfg.API.Keys) != 2 {
-		t.Errorf("API.Keys with empty env len = %d, want default 2", len(cfg.API.Keys))
+	if len(cfg.API.Keys) != 0 {
+		t.Errorf("API.Keys with empty env len = %d, want 0", len(cfg.API.Keys))
 	}
 }
 

@@ -139,7 +139,7 @@ func Load() *Config {
 			ClusterNodes: getEnvSlice("CLUSTER_NODES", []string{"http://localhost:5001"}),
 		},
 		API: APIConfig{
-			Keys: getEnvSlice("API_KEYS", []string{"SECRET_KEY_1", "SECRET_KEY_2"}),
+			Keys: getEnvSlice("API_KEYS", []string{}),
 		},
 		Upload: UploadConfig{
 			MaxFileSize:       getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),

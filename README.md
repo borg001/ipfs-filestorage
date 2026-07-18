@@ -110,7 +110,7 @@ GET /stream/{masterCID}/master.m3u8
 Сервис поддерживает двухуровневую проверку подлинности:
 
 ```
-Запрос → [1] Статические API-ключи (API_KEYS из env)
+Запрос → [1] Статические API-ключи (API_KEYS из env, если заданы)
            ├→ совпадение → 200
            └→ нет
          [2] Lua authorize(req) если AUTH_LUA_SCRIPT задан
@@ -118,7 +118,7 @@ GET /stream/{masterCID}/master.m3u8
            └→ false / ошибка / таймаут → 401
 ```
 
-**Статические ключи** — всегда активны, не требуют внешних сервисов. Указываются в `API_KEYS` через запятую.
+**Статические ключи** — опциональны, не требуют внешних сервисов. Указываются в `API_KEYS` через запятую. Если `API_KEYS` пустой, статическая проверка отключена.
 
 **Lua-скрипт** — опциональный fallback для интеграции с любым auth-провайдером (JWT-сервис, OAuth, Keycloak и т.д.). Скрипт получает весь HTTP-реквест и возвращает `true` (доступ разрешён) или `false` (отказ).
 
@@ -298,7 +298,7 @@ docker compose up --build -d
 | `NGINX_PORT` | `8081` | Порт nginx-балансировщика на хосте |
 | `IPFS_URL` | `http://localhost:5001` | URL локальной IPFS-ноды (переопределяется в docker-compose) |
 | `CLUSTER_NODES` | `http://ipfs1:5001,http://ipfs2:5001` | Адреса всех нод кластера через запятую |
-| `API_KEYS` | `SECRET_KEY_1,SECRET_KEY_2` | Статические API-ключи через запятую (всегда активны) |
+| `API_KEYS` | empty | Опциональные статические API-ключи через запятую |
 | `UPLOAD_MAX_FILE_SIZE` | `10485760` (10 МБ) | Максимальный размер файла |
 | `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,pdf,doc,docx,zip,json,html,txt,mp4,mov,webm,avi` | Разрешённые расширения |
 | `PINNING_RETRIES` | `3` | Попыток пиннинга при репликации |
@@ -333,6 +333,9 @@ docker compose up --build -d
 | `FFMPEG_PATH` | `ffmpeg` | Путь к бинарнику ffmpeg |
 | `FFPROBE_PATH` | `ffprobe` | Путь к бинарнику ffprobe |
 | `VIDEO_TEMP_DIR` | `/tmp/video_processing` | Директория для временных файлов транскодирования |
+| `VIDEO_THUMBNAIL_VARIANTS` | `180x320,360x640,720x1280` | Размеры poster JPEG для видео |
+| `VIDEO_THUMBNAIL_TIME_SEC` | `1.0` | Секунда видео для генерации poster |
+| `VIDEO_THUMBNAIL_QSCALE` | `3` | Качество JPEG poster для ffmpeg |
 
 ### Параметры Lua-авторизации
 
