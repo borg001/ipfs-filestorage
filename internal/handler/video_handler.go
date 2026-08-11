@@ -19,6 +19,7 @@ import (
 type VideoResponse struct {
 	MasterCID   string            `json:"master_cid"`
 	VariantCIDs map[string]string `json:"variant_cids"`
+	PosterCIDs  map[string]string `json:"poster_cids,omitempty"`
 	DurationSec float64           `json:"duration_sec"`
 	Status      string            `json:"status"`
 }
@@ -133,6 +134,7 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	resp := VideoResponse{
 		MasterCID:   uploadResult.MasterCID,
 		VariantCIDs: uploadResult.VariantCIDs,
+		PosterCIDs:  uploadResult.PosterCIDs,
 		DurationSec: result.Duration,
 		Status:      "processing_done",
 	}
