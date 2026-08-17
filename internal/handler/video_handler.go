@@ -300,17 +300,22 @@ func (h *Handler) fetchVideoAsset(ctx context.Context, cid string) (io.ReadClose
 }
 
 func playlistAuthSuffix(query url.Values) string {
+	values := url.Values{}
 	key := "token"
 	token := query.Get(key)
 	if token == "" {
 		key = "access_token"
 		token = query.Get(key)
 	}
-	if token == "" {
+	if token != "" {
+		values.Set(key, token)
+	}
+	if mediaLink := query.Get("media_link"); mediaLink != "" {
+		values.Set("media_link", mediaLink)
+	}
+	if len(values) == 0 {
 		return ""
 	}
-	values := url.Values{}
-	values.Set(key, token)
 	return "?" + values.Encode()
 }
 

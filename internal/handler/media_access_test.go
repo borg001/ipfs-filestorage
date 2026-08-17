@@ -65,6 +65,26 @@ func TestHandleFileUsesProtectedImageVariantFromPolicy(t *testing.T) {
 	}
 }
 
+func TestMediaPolicyForwardsGalleryLinkContext(t *testing.T) {
+	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("media_link"); got != "55" {
+			t.Fatalf("media_link = %q, want 55", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{}})
+	}))
+	defer policy.Close()
+
+	resolver := newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
+	request := httptest.NewRequest(http.MethodGet, "/file/"+testCID("LinkContext")+"/320x320?media_link=55", nil)
+	decision, err := resolver.Resolve(request.Context(), request, testCID("LinkContext"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Managed {
+		t.Fatal("empty policy response must keep ordinary media unmanaged")
+	}
+}
+
 func TestVideoPolicyProtectsMasterSegmentsAndPosters(t *testing.T) {
 	cfg := &config.Config{Video: config.VideoConfig{TempDir: t.TempDir()}}
 

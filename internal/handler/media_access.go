@@ -55,6 +55,11 @@ func (r *mediaAccessResolver) Resolve(ctx context.Context, source *http.Request,
 	query := endpoint.Query()
 	query.Set("search", cid)
 	query.Set("size", "2")
+	if source != nil {
+		if mediaLink := strings.TrimSpace(source.URL.Query().Get("media_link")); mediaLink != "" {
+			query.Set("media_link", mediaLink)
+		}
+	}
 	endpoint.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
