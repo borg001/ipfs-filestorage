@@ -38,4 +38,7 @@ func TestHandleConfig_ReturnsPublicImageConfig(t *testing.T) {
 	if len(resp.Image.Variants) != 1 || resp.Image.Variants[0].Key != "100x100" {
 		t.Fatalf("Unexpected variants: %+v", resp.Image.Variants)
 	}
+	if len(resp.Image.PrivacyVariants) != 2 || resp.Image.PrivacyVariants[0].Key != config.PrivacyBlurVariantKey || resp.Image.PrivacyVariants[1].Fallback != config.PrivacyBlurVariantKey {
+		t.Fatalf("Unexpected privacy variants: %+v", resp.Image.PrivacyVariants)
+	}
 }

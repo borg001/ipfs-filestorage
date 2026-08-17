@@ -16,6 +16,8 @@ func TestLoadDefaults(t *testing.T) {
 		"VIDEO_MAX_DURATION_SEC", "VIDEO_MAX_SIZE_MB",
 		"VIDEO_ASPECT_RATIO_TOLERANCE", "VIDEO_SEGMENT_DURATION_SEC",
 		"VIDEO_BITRATES", "FFMPEG_PATH", "FFPROBE_PATH", "VIDEO_TEMP_DIR",
+		"IMAGE_BLUR_RADIUS", "IMAGE_FACE_BLUR_RADIUS", "IMAGE_FACE_DETECTION_MIN_SIZE",
+		"IMAGE_FACE_DETECTION_MAX_SIZE", "IMAGE_FACE_DETECTION_MAX_DIMENSION",
 	}
 	for _, k := range envKeys {
 		os.Unsetenv(k)
@@ -56,6 +58,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Video.FFprobePath != "ffprobe" {
 		t.Errorf("Default Video.FFprobePath = %q, want ffprobe", cfg.Video.FFprobePath)
 	}
+	if cfg.Image.Privacy != DefaultImagePrivacyConfig() {
+		t.Errorf("Default Image.Privacy = %+v, want %+v", cfg.Image.Privacy, DefaultImagePrivacyConfig())
+	}
 }
 
 func TestLoadEnvOverrides(t *testing.T) {
@@ -66,6 +71,11 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("VIDEO_BITRATES", "800k,2000k")
 	t.Setenv("FFMPEG_PATH", "/usr/bin/ffmpeg")
 	t.Setenv("FFPROBE_PATH", "/usr/bin/ffprobe")
+	t.Setenv("IMAGE_BLUR_RADIUS", "31")
+	t.Setenv("IMAGE_FACE_BLUR_RADIUS", "19")
+	t.Setenv("IMAGE_FACE_DETECTION_MIN_SIZE", "48")
+	t.Setenv("IMAGE_FACE_DETECTION_MAX_SIZE", "512")
+	t.Setenv("IMAGE_FACE_DETECTION_MAX_DIMENSION", "960")
 
 	cfg := Load()
 
@@ -92,6 +102,18 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.Video.FFprobePath != "/usr/bin/ffprobe" {
 		t.Errorf("Video.FFprobePath = %q, want /usr/bin/ffprobe", cfg.Video.FFprobePath)
+	}
+	if got := cfg.Image.Privacy; got.BlurRadius != 31 || got.FaceBlurRadius != 19 || got.FaceMinSize != 48 || got.FaceMaxSize != 512 || got.FaceDetectionMaxDimension != 960 {
+		t.Errorf("Image.Privacy override = %+v", got)
+	}
+}
+
+func TestNormalizeImagePrivacyConfig(t *testing.T) {
+	got := NormalizeImagePrivacyConfig(ImagePrivacyConfig{FaceMaxSize: 512})
+	want := DefaultImagePrivacyConfig()
+	want.FaceMaxSize = 512
+	if got != want {
+		t.Errorf("NormalizeImagePrivacyConfig = %+v, want %+v", got, want)
 	}
 }
 

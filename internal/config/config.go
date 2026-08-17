@@ -50,6 +50,58 @@ type ImageVariant struct {
 	Height int    `json:"height"`
 }
 
+const (
+	// PrivacyBlurVariantKey is the full-image blur variant. It is safe to use
+	// as a restricted-media preview only when the original URL is not exposed.
+	PrivacyBlurVariantKey = "blur"
+	// PrivacyFaceBlurVariantKey masks detected faces while preserving the rest
+	// of the image for contexts where the full image remains visible.
+	PrivacyFaceBlurVariantKey = "blur_faces"
+)
+
+type ImagePrivacyConfig struct {
+	// BlurRadius is the radius used for the whole-image restricted preview.
+	BlurRadius int
+	// FaceBlurRadius is the minimum radius used for every detected face.
+	FaceBlurRadius int
+	// FaceMinSize is the smallest face, in pixels, considered by the detector.
+	FaceMinSize int
+	// FaceMaxSize is the largest face, in pixels. Zero uses the image size.
+	FaceMaxSize int
+	// FaceDetectionMaxDimension bounds detector work by downscaling the input.
+	FaceDetectionMaxDimension int
+}
+
+func DefaultImagePrivacyConfig() ImagePrivacyConfig {
+	return ImagePrivacyConfig{
+		BlurRadius:                24,
+		FaceBlurRadius:            16,
+		FaceMinSize:               32,
+		FaceMaxSize:               0,
+		FaceDetectionMaxDimension: 1280,
+	}
+}
+
+// NormalizeImagePrivacyConfig gives programmatic configs the same safe defaults
+// as environment-based configuration. FaceMaxSize deliberately keeps zero,
+// which means "up to the current image size".
+func NormalizeImagePrivacyConfig(value ImagePrivacyConfig) ImagePrivacyConfig {
+	defaults := DefaultImagePrivacyConfig()
+	if value.BlurRadius <= 0 {
+		value.BlurRadius = defaults.BlurRadius
+	}
+	if value.FaceBlurRadius <= 0 {
+		value.FaceBlurRadius = defaults.FaceBlurRadius
+	}
+	if value.FaceMinSize <= 0 {
+		value.FaceMinSize = defaults.FaceMinSize
+	}
+	if value.FaceDetectionMaxDimension <= 0 {
+		value.FaceDetectionMaxDimension = defaults.FaceDetectionMaxDimension
+	}
+	return value
+}
+
 type ImageConfig struct {
 	ProcessingEnabled bool
 	Variants          []ImageVariant
@@ -58,6 +110,7 @@ type ImageConfig struct {
 	JPEGQuality       int
 	WebPQuality       int
 	ResizePolicy      string
+	Privacy           ImagePrivacyConfig
 }
 
 type PinningConfig struct {
@@ -178,6 +231,13 @@ func Load() *Config {
 			JPEGQuality:     clampInt(getEnvInt("IMAGE_JPEG_QUALITY", 82), 1, 100),
 			WebPQuality:     clampInt(getEnvInt("IMAGE_WEBP_QUALITY", 82), 1, 100),
 			ResizePolicy:    validateChoice(getEnv("IMAGE_RESIZE_POLICY", "smart-cover"), []string{"fit", "cover-center", "smart-cover"}, "smart-cover"),
+			Privacy: ImagePrivacyConfig{
+				BlurRadius:                clampInt(getEnvInt("IMAGE_BLUR_RADIUS", 24), 1, 64),
+				FaceBlurRadius:            clampInt(getEnvInt("IMAGE_FACE_BLUR_RADIUS", 16), 1, 64),
+				FaceMinSize:               clampInt(getEnvInt("IMAGE_FACE_DETECTION_MIN_SIZE", 32), 16, 512),
+				FaceMaxSize:               clampInt(getEnvInt("IMAGE_FACE_DETECTION_MAX_SIZE", 0), 0, 4096),
+				FaceDetectionMaxDimension: clampInt(getEnvInt("IMAGE_FACE_DETECTION_MAX_DIMENSION", 1280), 128, 4096),
+			},
 		},
 		Pinning: PinningConfig{
 			Retries:      getEnvInt("PINNING_RETRIES", 3),

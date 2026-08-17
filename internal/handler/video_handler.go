@@ -17,11 +17,12 @@ import (
 
 // VideoResponse — ответ POST /upload-video.
 type VideoResponse struct {
-	MasterCID   string            `json:"master_cid"`
-	VariantCIDs map[string]string `json:"variant_cids"`
-	PosterCIDs  map[string]string `json:"poster_cids,omitempty"`
-	DurationSec float64           `json:"duration_sec"`
-	Status      string            `json:"status"`
+	MasterCID         string                       `json:"master_cid"`
+	VariantCIDs       map[string]string            `json:"variant_cids"`
+	PosterCIDs        map[string]string            `json:"poster_cids,omitempty"`
+	PrivacyPosterCIDs map[string]map[string]string `json:"privacy_poster_cids,omitempty"`
+	DurationSec       float64                      `json:"duration_sec"`
+	Status            string                       `json:"status"`
 }
 
 // clusterAdder адаптирует ipfs.Clusterer к интерфейсу video.IPFSAdder.
@@ -113,6 +114,10 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Transcoding failed"})
 		return
 	}
+	if err := h.buildVideoPrivacyPosters(ctx, outputDir); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Poster processing failed"})
+		return
+	}
 
 	// Загрузка в IPFS — через Clusterer → clusterAdder → video.IPFSAdder
 	uploader := video.NewUploader(&clusterAdder{cluster: h.cluster})
@@ -132,11 +137,12 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	h.unpinStore.TrackGroup(uploadResult.MasterCID, uploadResult.AllCIDs)
 
 	resp := VideoResponse{
-		MasterCID:   uploadResult.MasterCID,
-		VariantCIDs: uploadResult.VariantCIDs,
-		PosterCIDs:  uploadResult.PosterCIDs,
-		DurationSec: result.Duration,
-		Status:      "processing_done",
+		MasterCID:         uploadResult.MasterCID,
+		VariantCIDs:       uploadResult.VariantCIDs,
+		PosterCIDs:        uploadResult.PosterCIDs,
+		PrivacyPosterCIDs: uploadResult.PrivacyPosterCIDs,
+		DurationSec:       result.Duration,
+		Status:            "processing_done",
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

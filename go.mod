@@ -3,6 +3,7 @@ module github.com/borg001/ipfs-filestorage
 go 1.23
 
 require (
+	github.com/esimov/pigo v1.4.6
 	github.com/ipfs/boxo v0.18.0
 	github.com/ipfs/go-cid v0.4.1
 	github.com/ipfs/kubo v0.27.0

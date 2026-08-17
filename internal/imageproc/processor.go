@@ -37,12 +37,16 @@ type Result struct {
 }
 
 type Processor struct {
-	cfg        config.ImageConfig
-	ffmpegPath string
+	cfg             config.ImageConfig
+	ffmpegPath      string
+	faceDetector    faceDetector
+	faceDetectorErr error
 }
 
 func NewProcessor(cfg config.ImageConfig, ffmpegPath string) *Processor {
-	return &Processor{cfg: cfg, ffmpegPath: ffmpegPath}
+	cfg.Privacy = config.NormalizeImagePrivacyConfig(cfg.Privacy)
+	faceDetector, err := newPigoFaceDetector(cfg.Privacy)
+	return &Processor{cfg: cfg, ffmpegPath: ffmpegPath, faceDetector: faceDetector, faceDetectorErr: err}
 }
 
 func (p *Processor) Process(ctx context.Context, data []byte, contentType string) (Result, error) {
@@ -57,12 +61,18 @@ func (p *Processor) Process(ctx context.Context, data []byte, contentType string
 		Width:   cfg.Width,
 		Height:  cfg.Height,
 	}
-	if !p.cfg.ProcessingEnabled || len(p.cfg.Variants) == 0 {
-		return result, nil
-	}
-
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
+		return result, nil
+	}
+	outputFormat := p.outputFormat(result.Format)
+	privacyVariants, err := p.privacyVariants(ctx, src, outputFormat)
+	if err != nil {
+		return result, err
+	}
+	result.Variants = append(result.Variants, privacyVariants...)
+
+	if !p.cfg.ProcessingEnabled || len(p.cfg.Variants) == 0 {
 		return result, nil
 	}
 
@@ -70,7 +80,6 @@ func (p *Processor) Process(ctx context.Context, data []byte, contentType string
 		if variantCfg.Width <= 0 || variantCfg.Height <= 0 {
 			continue
 		}
-		outputFormat := p.outputFormat(result.Format)
 		resized := resize(src, variantCfg.Width, variantCfg.Height, p.cfg.ResizePolicy, outputFormat == "jpeg")
 		encoded, err := p.encode(ctx, resized, outputFormat)
 		if err != nil {
@@ -88,6 +97,21 @@ func (p *Processor) Process(ctx context.Context, data []byte, contentType string
 	}
 
 	return result, nil
+}
+
+// ProcessPrivacy generates only the stable privacy variants for an image. It
+// is used for video posters after ffmpeg extracts them, so video upload shares
+// the same format, blur and face-detection behavior as ordinary image upload.
+func (p *Processor) ProcessPrivacy(ctx context.Context, data []byte, contentType string) ([]Variant, error) {
+	_, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, nil
+	}
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, nil
+	}
+	return p.privacyVariants(ctx, src, p.outputFormat(normalizeFormat(format, contentType)))
 }
 
 func (p *Processor) outputFormat(sourceFormat string) string {
