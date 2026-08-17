@@ -25,13 +25,14 @@ import (
 
 // Response — стандартная структура ответа API.
 type Response struct {
-	CID      string                  `json:"cid"`
-	Name     string                  `json:"name"`
-	Size     int64                   `json:"size"`
-	Pinned   bool                    `json:"pinned"`
-	Type     string                  `json:"type,omitempty"`
-	Original *bundle.Asset           `json:"original,omitempty"`
-	Variants map[string]bundle.Asset `json:"variants,omitempty"`
+	CID         string                  `json:"cid"`
+	Name        string                  `json:"name"`
+	Size        int64                   `json:"size"`
+	Pinned      bool                    `json:"pinned"`
+	Type        string                  `json:"type,omitempty"`
+	Original    *bundle.Asset           `json:"original,omitempty"`
+	Variants    map[string]bundle.Asset `json:"variants,omitempty"`
+	PrivacyBlur *bundle.Asset           `json:"privacy_blur,omitempty"`
 }
 
 // Handler содержит HTTP-хендлеры сервиса.
@@ -94,13 +95,14 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 
 func responseFromManifest(m bundle.Manifest, pinned bool) Response {
 	return Response{
-		CID:      m.CID,
-		Name:     m.Name,
-		Size:     m.Size,
-		Pinned:   pinned,
-		Type:     m.Type,
-		Original: &m.Original,
-		Variants: m.Variants,
+		CID:         m.CID,
+		Name:        m.Name,
+		Size:        m.Size,
+		Pinned:      pinned,
+		Type:        m.Type,
+		Original:    &m.Original,
+		Variants:    m.Variants,
+		PrivacyBlur: m.PrivacyBlur,
 	}
 }
 
@@ -116,6 +118,10 @@ func formatFromFilename(filename string) string {
 }
 
 func (h *Handler) buildFileBundle(ctx context.Context, filename string, data []byte, contentType string) (bundle.Manifest, error) {
+	return h.buildFileBundleWithPrivacy(ctx, filename, data, contentType, true)
+}
+
+func (h *Handler) buildFileBundleWithPrivacy(ctx context.Context, filename string, data []byte, contentType string, includePrivacyBlur bool) (bundle.Manifest, error) {
 	manifest := bundle.NewFileManifest(filename, contentType, formatFromFilename(filename), int64(len(data)))
 	entries := map[string][]byte{
 		bundle.OriginalFilename: data,
@@ -143,6 +149,25 @@ func (h *Handler) buildFileBundle(ctx context.Context, filename string, data []b
 					Height:      variant.Height,
 					Size:        int64(len(variant.Data)),
 				}
+			}
+		}
+		if includePrivacyBlur {
+			blurred, err := processor.PrivacyBlur(ctx, data, contentType)
+			if err != nil {
+				return bundle.Manifest{}, fmt.Errorf("build privacy blur: %w", err)
+			}
+			blurManifest, err := h.buildFileBundleWithPrivacy(ctx, blurred.Filename, blurred.Data, blurred.ContentType, false)
+			if err != nil {
+				return bundle.Manifest{}, fmt.Errorf("upload privacy blur: %w", err)
+			}
+			manifest.PrivacyBlur = &bundle.Asset{
+				CID:         blurManifest.CID,
+				Path:        "/file/" + blurManifest.CID,
+				Format:      blurred.Format,
+				ContentType: blurred.ContentType,
+				Width:       blurred.Width,
+				Height:      blurred.Height,
+				Size:        int64(len(blurred.Data)),
 			}
 		}
 	}
@@ -238,6 +263,9 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.replicateAsync(manifest.CID)
+	if manifest.PrivacyBlur != nil && manifest.PrivacyBlur.CID != "" {
+		h.replicateAsync(manifest.PrivacyBlur.CID)
+	}
 	writeJSON(w, http.StatusOK, responseFromManifest(manifest, true))
 }
 
@@ -315,6 +343,9 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.replicateAsync(manifest.CID)
+			if manifest.PrivacyBlur != nil && manifest.PrivacyBlur.CID != "" {
+				h.replicateAsync(manifest.PrivacyBlur.CID)
+			}
 
 			mu.Lock()
 			results[idx] = responseFromManifest(manifest, true)
@@ -346,6 +377,59 @@ func (h *Handler) readManifest(ctx context.Context, cid string) (bundle.Manifest
 	}
 	manifest.Finalize(cid)
 	return manifest, nil
+}
+
+// HandleDerivePrivacyBlur creates an independent blurred bundle for an
+// already-uploaded image. It is intentionally idempotent by content: IPFS
+// returns the same CID when the source bytes and processing config are equal.
+func (h *Handler) HandleDerivePrivacyBlur(w http.ResponseWriter, r *http.Request) {
+	cid := strings.Trim(strings.TrimPrefix(r.URL.Path, "/derive-blur/"), "/")
+	if err := validateCID(cid); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	ctx := r.Context()
+	manifest, err := h.readManifest(ctx, cid)
+	if err != nil || manifest.Type != "image" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Image not found"})
+		return
+	}
+	reader, err := h.cluster.ClusterTryFetchPath(ctx, cid, manifest.Original.BundlePath)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Image not found"})
+		return
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(io.LimitReader(reader, h.cfg.Upload.MaxFileSize+1))
+	if err != nil || int64(len(data)) > h.cfg.Upload.MaxFileSize {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to read image"})
+		return
+	}
+
+	processor := imageproc.NewProcessor(h.cfg.Image, h.cfg.Video.FFmpegPath)
+	blurred, err := processor.PrivacyBlur(ctx, data, manifest.Original.ContentType)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to blur image"})
+		return
+	}
+	blurManifest, err := h.buildFileBundleWithPrivacy(ctx, blurred.Filename, blurred.Data, blurred.ContentType, false)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to store blurred image"})
+		return
+	}
+	h.replicateAsync(blurManifest.CID)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"privacy_blur": bundle.Asset{
+			CID:         blurManifest.CID,
+			Path:        "/file/" + blurManifest.CID,
+			Format:      blurred.Format,
+			ContentType: blurred.ContentType,
+			Width:       blurred.Width,
+			Height:      blurred.Height,
+			Size:        int64(len(blurred.Data)),
+		},
+	})
 }
 
 // HandleFile обрабатывает GET /file/{cid}, /file/{cid}/bundle и /file/{cid}/{size}.

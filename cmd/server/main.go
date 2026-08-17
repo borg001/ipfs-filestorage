@@ -50,6 +50,7 @@ func main() {
 	// File upload/download handlers
 	mux.HandleFunc("POST /upload", handlers.HandleUpload)
 	mux.HandleFunc("POST /upload-multiple", handlers.HandleUploadMultiple)
+	mux.HandleFunc("POST /derive-blur/", handlers.HandleDerivePrivacyBlur)
 	mux.HandleFunc("GET /file/", handlers.HandleFile)
 	mux.HandleFunc("DELETE /file/", handlers.HandleDelete)
 	mux.HandleFunc("GET /config", handlers.HandleConfig)

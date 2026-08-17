@@ -168,6 +168,12 @@ func TestHandleUpload_ImageBundleVariants(t *testing.T) {
 	if resp.Original == nil || resp.Original.Width != 200 || resp.Original.Height != 120 {
 		t.Fatalf("Original metadata = %+v, want 200x120", resp.Original)
 	}
+	if resp.PrivacyBlur == nil || resp.PrivacyBlur.CID == "" {
+		t.Fatalf("Privacy blur metadata missing: %+v", resp.PrivacyBlur)
+	}
+	if resp.PrivacyBlur.CID == resp.CID {
+		t.Fatal("Privacy blur must use an independent CID")
+	}
 	variant, ok := resp.Variants["100x100"]
 	if !ok {
 		t.Fatalf("Variant 100x100 missing: %+v", resp.Variants)
@@ -205,5 +211,44 @@ func TestHandleUpload_ImageBundleVariants(t *testing.T) {
 	}
 	if cfgJPEG.Width != 100 || cfgJPEG.Height != 100 {
 		t.Fatalf("Variant dimensions = %dx%d, want 100x100", cfgJPEG.Width, cfgJPEG.Height)
+	}
+
+	blurReq := httptest.NewRequest(http.MethodGet, "/file/"+resp.PrivacyBlur.CID, nil)
+	blurW := httptest.NewRecorder()
+	h.HandleFile(blurW, blurReq)
+	if blurW.Code != http.StatusOK {
+		t.Fatalf("Privacy blur status = %d, want 200, body: %s", blurW.Code, blurW.Body.String())
+	}
+	blurCfg, err := jpeg.DecodeConfig(bytes.NewReader(blurW.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blurCfg.Width != 200 || blurCfg.Height != 120 {
+		t.Fatalf("Privacy blur dimensions = %dx%d, want 200x120", blurCfg.Width, blurCfg.Height)
+	}
+
+	deriveReq := httptest.NewRequest(http.MethodPost, "/derive-blur/"+resp.CID, nil)
+	deriveW := httptest.NewRecorder()
+	h.HandleDerivePrivacyBlur(deriveW, deriveReq)
+	if deriveW.Code != http.StatusOK {
+		t.Fatalf("Derive privacy blur status = %d, want 200, body: %s", deriveW.Code, deriveW.Body.String())
+	}
+	var derived struct {
+		PrivacyBlur bundle.Asset `json:"privacy_blur"`
+	}
+	if err := json.Unmarshal(deriveW.Body.Bytes(), &derived); err != nil {
+		t.Fatal(err)
+	}
+	if derived.PrivacyBlur.CID == "" || derived.PrivacyBlur.CID == resp.CID {
+		t.Fatalf("Derived privacy blur must use an independent CID: %+v", derived.PrivacyBlur)
+	}
+	derivedReq := httptest.NewRequest(http.MethodGet, "/file/"+derived.PrivacyBlur.CID, nil)
+	derivedW := httptest.NewRecorder()
+	h.HandleFile(derivedW, derivedReq)
+	if derivedW.Code != http.StatusOK {
+		t.Fatalf("Derived privacy blur status = %d, want 200", derivedW.Code)
+	}
+	if !bytes.Equal(derivedW.Body.Bytes(), blurW.Body.Bytes()) {
+		t.Fatal("Deriving a privacy blur from the same original must produce identical blurred bytes")
 	}
 }

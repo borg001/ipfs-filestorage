@@ -90,6 +90,53 @@ func (p *Processor) Process(ctx context.Context, data []byte, contentType string
 	return result, nil
 }
 
+// PrivacyBlur produces a separate, physically blurred image. It is uploaded as
+// an independent IPFS bundle so a consumer that receives its CID cannot derive
+// or request the original image by changing the URL path.
+func (p *Processor) PrivacyBlur(ctx context.Context, data []byte, contentType string) (Variant, error) {
+	src, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return Variant{}, err
+	}
+
+	bounds := src.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return Variant{}, fmt.Errorf("invalid image dimensions")
+	}
+	const maxDimension = 1600
+	if width > maxDimension || height > maxDimension {
+		scale := math.Min(float64(maxDimension)/float64(width), float64(maxDimension)/float64(height))
+		width = max(1, int(math.Round(float64(width)*scale)))
+		height = max(1, int(math.Round(float64(height)*scale)))
+	}
+
+	// Downscale heavily and restore with a smooth interpolator. The resulting
+	// bytes contain the blur itself; no CSS filter or placeholder is involved.
+	blurWidth := max(12, width/28)
+	blurHeight := max(12, height/28)
+	low := image.NewNRGBA(image.Rect(0, 0, blurWidth, blurHeight))
+	xdraw.ApproxBiLinear.Scale(low, low.Bounds(), src, bounds, xdraw.Src, nil)
+	blurred := image.NewNRGBA(image.Rect(0, 0, width, height))
+	xdraw.CatmullRom.Scale(blurred, blurred.Bounds(), low, low.Bounds(), xdraw.Src, nil)
+
+	normalized := normalizeFormat(format, contentType)
+	outputFormat := p.outputFormat(normalized)
+	encoded, err := p.encode(ctx, blurred, outputFormat)
+	if err != nil {
+		return Variant{}, fmt.Errorf("encode privacy blur: %w", err)
+	}
+	return Variant{
+		Key:         "privacy-blur",
+		Filename:    "privacy-blur." + extension(outputFormat),
+		Data:        encoded,
+		Format:      outputFormat,
+		ContentType: contentTypeForFormat(outputFormat),
+		Width:       width,
+		Height:      height,
+	}, nil
+}
+
 func (p *Processor) outputFormat(sourceFormat string) string {
 	switch p.cfg.OutputFormat {
 	case "jpeg", "webp":

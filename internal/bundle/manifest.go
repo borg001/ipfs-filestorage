@@ -17,14 +17,15 @@ type Asset struct {
 }
 
 type Manifest struct {
-	CID      string            `json:"cid"`
-	Name     string            `json:"name"`
-	Type     string            `json:"type"`
-	Version  int               `json:"version"`
-	Size     int64             `json:"size"`
-	Original Asset             `json:"original"`
-	Variants map[string]Asset  `json:"variants,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	CID         string            `json:"cid"`
+	Name        string            `json:"name"`
+	Type        string            `json:"type"`
+	Version     int               `json:"version"`
+	Size        int64             `json:"size"`
+	Original    Asset             `json:"original"`
+	Variants    map[string]Asset  `json:"variants,omitempty"`
+	PrivacyBlur *Asset            `json:"privacy_blur,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 func NewFileManifest(name, contentType, format string, size int64) Manifest {
