@@ -13,6 +13,7 @@ import (
 
 	"github.com/borg001/ipfs-filestorage/internal/bundle"
 	"github.com/borg001/ipfs-filestorage/internal/config"
+	"github.com/borg001/ipfs-filestorage/internal/imageproc"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 )
 
@@ -38,9 +39,10 @@ func setupVideoTestHandler(t *testing.T, cfg *config.Config) *Handler {
 		t.Fatal(err)
 	}
 	return &Handler{
-		cfg:        cfg,
-		cluster:    cluster,
-		unpinStore: unpinStore,
+		cfg:            cfg,
+		cluster:        cluster,
+		unpinStore:     unpinStore,
+		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
 	}
 }
 

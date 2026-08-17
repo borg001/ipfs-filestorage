@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/borg001/ipfs-filestorage/internal/imageproc"
 )
 
 // buildVideoPrivacyPosters creates privacy copies after ffmpeg has extracted
@@ -23,7 +21,6 @@ func (h *Handler) buildVideoPrivacyPosters(ctx context.Context, outputDir string
 		return fmt.Errorf("read posters directory: %w", err)
 	}
 
-	processor := imageproc.NewProcessor(h.cfg.Image, h.cfg.Video.FFmpegPath)
 	for _, entry := range entries {
 		if entry.IsDir() || !isPosterImage(entry.Name()) {
 			continue
@@ -36,7 +33,7 @@ func (h *Handler) buildVideoPrivacyPosters(ctx context.Context, outputDir string
 		if err != nil {
 			return fmt.Errorf("read poster %s: %w", entry.Name(), err)
 		}
-		variants, err := processor.ProcessPrivacy(ctx, data, "image/jpeg")
+		variants, err := h.imageProcessor.ProcessPrivacy(ctx, data, "image/jpeg")
 		if err != nil {
 			return fmt.Errorf("process privacy poster %s: %w", entry.Name(), err)
 		}

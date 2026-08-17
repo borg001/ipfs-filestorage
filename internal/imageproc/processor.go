@@ -45,8 +45,17 @@ type Processor struct {
 
 func NewProcessor(cfg config.ImageConfig, ffmpegPath string) *Processor {
 	cfg.Privacy = config.NormalizeImagePrivacyConfig(cfg.Privacy)
-	faceDetector, err := newPigoFaceDetector(cfg.Privacy)
+	faceDetector, err := newYuNetFaceDetector(cfg.Privacy)
 	return &Processor{cfg: cfg, ffmpegPath: ffmpegPath, faceDetector: faceDetector, faceDetectorErr: err}
+}
+
+func (p *Processor) Close() {
+	if p == nil {
+		return
+	}
+	if detector, ok := p.faceDetector.(interface{ Close() }); ok {
+		detector.Close()
+	}
 }
 
 func (p *Processor) Process(ctx context.Context, data []byte, contentType string) (Result, error) {

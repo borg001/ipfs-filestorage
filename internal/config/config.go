@@ -64,27 +64,26 @@ type ImagePrivacyConfig struct {
 	BlurRadius int
 	// FaceBlurRadius is the minimum radius used for every detected face.
 	FaceBlurRadius int
-	// FaceMinSize is the smallest face, in pixels, considered by the detector.
-	FaceMinSize int
-	// FaceMaxSize is the largest face, in pixels. Zero uses the image size.
-	FaceMaxSize int
 	// FaceDetectionMaxDimension bounds detector work by downscaling the input.
 	FaceDetectionMaxDimension int
+	// FaceDetectionScoreThreshold rejects low-confidence YuNet detections.
+	FaceDetectionScoreThreshold float64
+	// FaceDetectionNMSThreshold controls YuNet non-maximum suppression.
+	FaceDetectionNMSThreshold float64
 }
 
 func DefaultImagePrivacyConfig() ImagePrivacyConfig {
 	return ImagePrivacyConfig{
-		BlurRadius:                24,
-		FaceBlurRadius:            16,
-		FaceMinSize:               32,
-		FaceMaxSize:               0,
-		FaceDetectionMaxDimension: 1280,
+		BlurRadius:                  24,
+		FaceBlurRadius:              16,
+		FaceDetectionMaxDimension:   1280,
+		FaceDetectionScoreThreshold: 0.8,
+		FaceDetectionNMSThreshold:   0.3,
 	}
 }
 
 // NormalizeImagePrivacyConfig gives programmatic configs the same safe defaults
-// as environment-based configuration. FaceMaxSize deliberately keeps zero,
-// which means "up to the current image size".
+// as environment-based configuration.
 func NormalizeImagePrivacyConfig(value ImagePrivacyConfig) ImagePrivacyConfig {
 	defaults := DefaultImagePrivacyConfig()
 	if value.BlurRadius <= 0 {
@@ -93,12 +92,17 @@ func NormalizeImagePrivacyConfig(value ImagePrivacyConfig) ImagePrivacyConfig {
 	if value.FaceBlurRadius <= 0 {
 		value.FaceBlurRadius = defaults.FaceBlurRadius
 	}
-	if value.FaceMinSize <= 0 {
-		value.FaceMinSize = defaults.FaceMinSize
-	}
 	if value.FaceDetectionMaxDimension <= 0 {
 		value.FaceDetectionMaxDimension = defaults.FaceDetectionMaxDimension
 	}
+	if value.FaceDetectionScoreThreshold <= 0 {
+		value.FaceDetectionScoreThreshold = defaults.FaceDetectionScoreThreshold
+	}
+	if value.FaceDetectionNMSThreshold <= 0 {
+		value.FaceDetectionNMSThreshold = defaults.FaceDetectionNMSThreshold
+	}
+	value.FaceDetectionScoreThreshold = clampFloat(value.FaceDetectionScoreThreshold, 0.1, 0.99)
+	value.FaceDetectionNMSThreshold = clampFloat(value.FaceDetectionNMSThreshold, 0.1, 0.99)
 	return value
 }
 
@@ -232,11 +236,11 @@ func Load() *Config {
 			WebPQuality:     clampInt(getEnvInt("IMAGE_WEBP_QUALITY", 82), 1, 100),
 			ResizePolicy:    validateChoice(getEnv("IMAGE_RESIZE_POLICY", "smart-cover"), []string{"fit", "cover-center", "smart-cover"}, "smart-cover"),
 			Privacy: ImagePrivacyConfig{
-				BlurRadius:                clampInt(getEnvInt("IMAGE_BLUR_RADIUS", 24), 1, 64),
-				FaceBlurRadius:            clampInt(getEnvInt("IMAGE_FACE_BLUR_RADIUS", 16), 1, 64),
-				FaceMinSize:               clampInt(getEnvInt("IMAGE_FACE_DETECTION_MIN_SIZE", 32), 16, 512),
-				FaceMaxSize:               clampInt(getEnvInt("IMAGE_FACE_DETECTION_MAX_SIZE", 0), 0, 4096),
-				FaceDetectionMaxDimension: clampInt(getEnvInt("IMAGE_FACE_DETECTION_MAX_DIMENSION", 1280), 128, 4096),
+				BlurRadius:                  clampInt(getEnvInt("IMAGE_BLUR_RADIUS", 24), 1, 64),
+				FaceBlurRadius:              clampInt(getEnvInt("IMAGE_FACE_BLUR_RADIUS", 16), 1, 64),
+				FaceDetectionMaxDimension:   clampInt(getEnvInt("IMAGE_FACE_DETECTION_MAX_DIMENSION", 1280), 128, 4096),
+				FaceDetectionScoreThreshold: clampFloat(getEnvFloat("IMAGE_FACE_DETECTION_SCORE_THRESHOLD", 0.8), 0.1, 0.99),
+				FaceDetectionNMSThreshold:   clampFloat(getEnvFloat("IMAGE_FACE_DETECTION_NMS_THRESHOLD", 0.3), 0.1, 0.99),
 			},
 		},
 		Pinning: PinningConfig{
@@ -349,6 +353,16 @@ func validateChoice(value string, allowed []string, def string) string {
 }
 
 func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func clampFloat(value, min, max float64) float64 {
 	if value < min {
 		return min
 	}

@@ -15,7 +15,7 @@ func TestBuildVideoPrivacyPosters(t *testing.T) {
 	if err := os.MkdirAll(postersDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join("..", "imageproc", "testdata", "pigo-sample.jpg"))
+	data, err := os.ReadFile(filepath.Join("..", "imageproc", "testdata", "portrait-single-face.jpg"))
 	if err != nil {
 		t.Fatal(err)
 	}

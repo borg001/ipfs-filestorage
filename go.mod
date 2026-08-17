@@ -3,12 +3,12 @@ module github.com/borg001/ipfs-filestorage
 go 1.23
 
 require (
-	github.com/esimov/pigo v1.4.6
 	github.com/ipfs/boxo v0.18.0
 	github.com/ipfs/go-cid v0.4.1
 	github.com/ipfs/kubo v0.27.0
 	github.com/multiformats/go-multiaddr v0.12.2
 	github.com/yuin/gopher-lua v1.1.2
+	gocv.io/x/gocv v0.42.0
 	golang.org/x/image v0.18.0
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
 )

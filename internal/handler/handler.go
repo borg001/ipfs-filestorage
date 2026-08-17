@@ -36,10 +36,11 @@ type Response struct {
 
 // Handler содержит HTTP-хендлеры сервиса.
 type Handler struct {
-	cfg         *config.Config
-	cluster     ipfs.Clusterer
-	unpinStore  *store.UnpinStore
-	unpinWorker *unpin.Worker
+	cfg            *config.Config
+	cluster        ipfs.Clusterer
+	unpinStore     *store.UnpinStore
+	unpinWorker    *unpin.Worker
+	imageProcessor *imageproc.Processor
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -55,9 +56,10 @@ func NewHandler(cfg *config.Config) *Handler {
 	}
 
 	h := &Handler{
-		cfg:        cfg,
-		cluster:    cluster,
-		unpinStore: unpinStore,
+		cfg:            cfg,
+		cluster:        cluster,
+		unpinStore:     unpinStore,
+		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
 	}
 
 	// Запускаем TTL worker
@@ -121,8 +123,7 @@ func (h *Handler) buildFileBundle(ctx context.Context, filename string, data []b
 		bundle.OriginalFilename: data,
 	}
 
-	processor := imageproc.NewProcessor(h.cfg.Image, h.cfg.Video.FFmpegPath)
-	imageResult, err := processor.Process(ctx, data, contentType)
+	imageResult, err := h.imageProcessor.Process(ctx, data, contentType)
 	if err != nil {
 		return bundle.Manifest{}, err
 	}

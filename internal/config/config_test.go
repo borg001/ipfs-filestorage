@@ -16,8 +16,8 @@ func TestLoadDefaults(t *testing.T) {
 		"VIDEO_MAX_DURATION_SEC", "VIDEO_MAX_SIZE_MB",
 		"VIDEO_ASPECT_RATIO_TOLERANCE", "VIDEO_SEGMENT_DURATION_SEC",
 		"VIDEO_BITRATES", "FFMPEG_PATH", "FFPROBE_PATH", "VIDEO_TEMP_DIR",
-		"IMAGE_BLUR_RADIUS", "IMAGE_FACE_BLUR_RADIUS", "IMAGE_FACE_DETECTION_MIN_SIZE",
-		"IMAGE_FACE_DETECTION_MAX_SIZE", "IMAGE_FACE_DETECTION_MAX_DIMENSION",
+		"IMAGE_BLUR_RADIUS", "IMAGE_FACE_BLUR_RADIUS", "IMAGE_FACE_DETECTION_MAX_DIMENSION",
+		"IMAGE_FACE_DETECTION_SCORE_THRESHOLD", "IMAGE_FACE_DETECTION_NMS_THRESHOLD",
 	}
 	for _, k := range envKeys {
 		os.Unsetenv(k)
@@ -73,9 +73,9 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("FFPROBE_PATH", "/usr/bin/ffprobe")
 	t.Setenv("IMAGE_BLUR_RADIUS", "31")
 	t.Setenv("IMAGE_FACE_BLUR_RADIUS", "19")
-	t.Setenv("IMAGE_FACE_DETECTION_MIN_SIZE", "48")
-	t.Setenv("IMAGE_FACE_DETECTION_MAX_SIZE", "512")
 	t.Setenv("IMAGE_FACE_DETECTION_MAX_DIMENSION", "960")
+	t.Setenv("IMAGE_FACE_DETECTION_SCORE_THRESHOLD", "0.87")
+	t.Setenv("IMAGE_FACE_DETECTION_NMS_THRESHOLD", "0.42")
 
 	cfg := Load()
 
@@ -103,15 +103,15 @@ func TestLoadEnvOverrides(t *testing.T) {
 	if cfg.Video.FFprobePath != "/usr/bin/ffprobe" {
 		t.Errorf("Video.FFprobePath = %q, want /usr/bin/ffprobe", cfg.Video.FFprobePath)
 	}
-	if got := cfg.Image.Privacy; got.BlurRadius != 31 || got.FaceBlurRadius != 19 || got.FaceMinSize != 48 || got.FaceMaxSize != 512 || got.FaceDetectionMaxDimension != 960 {
+	if got := cfg.Image.Privacy; got.BlurRadius != 31 || got.FaceBlurRadius != 19 || got.FaceDetectionMaxDimension != 960 || got.FaceDetectionScoreThreshold != 0.87 || got.FaceDetectionNMSThreshold != 0.42 {
 		t.Errorf("Image.Privacy override = %+v", got)
 	}
 }
 
 func TestNormalizeImagePrivacyConfig(t *testing.T) {
-	got := NormalizeImagePrivacyConfig(ImagePrivacyConfig{FaceMaxSize: 512})
+	got := NormalizeImagePrivacyConfig(ImagePrivacyConfig{FaceDetectionScoreThreshold: 0.7})
 	want := DefaultImagePrivacyConfig()
-	want.FaceMaxSize = 512
+	want.FaceDetectionScoreThreshold = 0.7
 	if got != want {
 		t.Errorf("NormalizeImagePrivacyConfig = %+v, want %+v", got, want)
 	}

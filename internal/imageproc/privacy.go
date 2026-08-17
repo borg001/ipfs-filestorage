@@ -11,84 +11,96 @@ import (
 	"sync"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
-	pigo "github.com/esimov/pigo/core"
+	"gocv.io/x/gocv"
 	xdraw "golang.org/x/image/draw"
 )
 
-//go:embed assets/facefinder
-var facefinderCascade []byte
-
-var (
-	facefinderOnce       sync.Once
-	facefinderClassifier *pigo.Pigo
-	facefinderErr        error
-)
+//go:embed assets/face_detection_yunet_2023mar.onnx
+var yuNetModel []byte
 
 type faceDetector interface {
 	Detect(image.Image) ([]image.Rectangle, error)
 }
 
-type pigoFaceDetector struct {
-	classifier *pigo.Pigo
-	cfg        config.ImagePrivacyConfig
+type yuNetFaceDetector struct {
+	cfg      config.ImagePrivacyConfig
+	detector gocv.FaceDetectorYN
+	mu       sync.Mutex
 }
 
-func newPigoFaceDetector(cfg config.ImagePrivacyConfig) (*pigoFaceDetector, error) {
-	facefinderOnce.Do(func() {
-		facefinderClassifier, facefinderErr = pigo.NewPigo().Unpack(facefinderCascade)
-	})
-	if facefinderErr != nil {
-		return nil, fmt.Errorf("unpack embedded face detector: %w", facefinderErr)
+func newYuNetFaceDetector(cfg config.ImagePrivacyConfig) (*yuNetFaceDetector, error) {
+	if len(yuNetModel) == 0 {
+		return nil, fmt.Errorf("embedded YuNet model is empty")
 	}
-	return &pigoFaceDetector{classifier: facefinderClassifier, cfg: cfg}, nil
+
+	gocv.ClearLastException()
+	detector := gocv.NewFaceDetectorYNFromBytesWithParams(
+		"onnx",
+		yuNetModel,
+		nil,
+		image.Pt(32, 32),
+		float32(cfg.FaceDetectionScoreThreshold),
+		float32(cfg.FaceDetectionNMSThreshold),
+		5000,
+		0,
+		0,
+	)
+	if err := gocv.LastExceptionError(); err != nil {
+		return nil, fmt.Errorf("initialize embedded YuNet detector: %w", err)
+	}
+	return &yuNetFaceDetector{cfg: cfg, detector: detector}, nil
 }
 
-func (d *pigoFaceDetector) Detect(src image.Image) ([]image.Rectangle, error) {
-	if d == nil || d.classifier == nil {
+func (d *yuNetFaceDetector) Close() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.detector.Close()
+}
+
+func (d *yuNetFaceDetector) Detect(src image.Image) ([]image.Rectangle, error) {
+	if d == nil {
 		return nil, fmt.Errorf("face detector is not initialized")
 	}
 
 	detectionImage, scale := scaleForFaceDetection(src, d.cfg.FaceDetectionMaxDimension)
-	bounds := detectionImage.Bounds()
-	minSize := max(1, int(math.Round(float64(d.cfg.FaceMinSize)*scale)))
-	if bounds.Dx() < minSize || bounds.Dy() < minSize {
+	inputWidth := roundUpToMultiple(detectionImage.Bounds().Dx(), 32)
+	inputHeight := roundUpToMultiple(detectionImage.Bounds().Dy(), 32)
+	input, err := newBGRMat(detectionImage, inputWidth, inputHeight)
+	if err != nil {
+		return nil, fmt.Errorf("prepare YuNet input: %w", err)
+	}
+	defer input.Close()
+
+	detections := gocv.NewMat()
+	defer detections.Close()
+
+	d.mu.Lock()
+	gocv.ClearLastException()
+	d.detector.SetInputSize(image.Pt(inputWidth, inputHeight))
+	ok := d.detector.Detect(input, &detections)
+	err = gocv.LastExceptionError()
+	d.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("run YuNet detector: %w", err)
+	}
+	if ok == 0 || detections.Empty() {
 		return nil, nil
 	}
-
-	maxSize := d.cfg.FaceMaxSize
-	if maxSize == 0 {
-		maxSize = min(bounds.Dx(), bounds.Dy())
-	} else {
-		maxSize = max(1, int(math.Round(float64(maxSize)*scale)))
-	}
-	maxSize = min(maxSize, min(bounds.Dx(), bounds.Dy()))
-	if maxSize < minSize {
-		return nil, nil
+	if detections.Cols() < 15 {
+		return nil, fmt.Errorf("unexpected YuNet detection matrix: %d columns", detections.Cols())
 	}
 
-	detections := d.classifier.RunCascade(pigo.CascadeParams{
-		MinSize:     minSize,
-		MaxSize:     maxSize,
-		ShiftFactor: 0.1,
-		ScaleFactor: 1.1,
-		ImageParams: pigo.ImageParams{
-			Pixels: pigo.RgbToGrayscale(detectionImage),
-			Rows:   bounds.Dy(),
-			Cols:   bounds.Dx(),
-			Dim:    bounds.Dx(),
-		},
-	}, 0)
-	detections = d.classifier.ClusterDetections(detections, 0.2)
-
-	faces := make([]image.Rectangle, 0, len(detections))
+	faces := make([]image.Rectangle, 0, detections.Rows())
 	originalBounds := src.Bounds()
-	for _, detection := range detections {
-		half := detection.Scale / 2
+	for row := 0; row < detections.Rows(); row++ {
 		rect := image.Rect(
-			int(math.Round(float64(detection.Col-half)/scale)),
-			int(math.Round(float64(detection.Row-half)/scale)),
-			int(math.Round(float64(detection.Col+half)/scale)),
-			int(math.Round(float64(detection.Row+half)/scale)),
+			int(math.Round(float64(detections.GetFloatAt(row, 0))/scale)),
+			int(math.Round(float64(detections.GetFloatAt(row, 1))/scale)),
+			int(math.Round(float64(detections.GetFloatAt(row, 0)+detections.GetFloatAt(row, 2))/scale)),
+			int(math.Round(float64(detections.GetFloatAt(row, 1)+detections.GetFloatAt(row, 3))/scale)),
 		)
 		rect = expandFaceRect(rect, originalBounds)
 		if !rect.Empty() {
@@ -96,6 +108,30 @@ func (d *pigoFaceDetector) Detect(src image.Image) ([]image.Rectangle, error) {
 		}
 	}
 	return faces, nil
+}
+
+func newBGRMat(src *image.NRGBA, width, height int) (gocv.Mat, error) {
+	data := make([]byte, width*height*3)
+	bounds := src.Bounds()
+	for y := 0; y < bounds.Dy(); y++ {
+		sourceOffset := y * src.Stride
+		targetOffset := y * width * 3
+		for x := 0; x < bounds.Dx(); x++ {
+			pixelOffset := sourceOffset + x*4
+			dataOffset := targetOffset + x*3
+			data[dataOffset] = src.Pix[pixelOffset+2]
+			data[dataOffset+1] = src.Pix[pixelOffset+1]
+			data[dataOffset+2] = src.Pix[pixelOffset]
+		}
+	}
+	return gocv.NewMatFromBytes(height, width, gocv.MatTypeCV8UC3, data)
+}
+
+func roundUpToMultiple(value, multiple int) int {
+	if value <= 0 || multiple <= 0 {
+		return 0
+	}
+	return ((value + multiple - 1) / multiple) * multiple
 }
 
 func scaleForFaceDetection(src image.Image, maxDimension int) (*image.NRGBA, float64) {

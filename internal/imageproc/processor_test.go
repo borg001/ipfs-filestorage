@@ -23,8 +23,8 @@ func (d staticFaceDetector) Detect(image.Image) ([]image.Rectangle, error) {
 	return d.faces, d.err
 }
 
-func TestPigoFaceDetectorDetectsFace(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "pigo-sample.jpg"))
+func TestYuNetFaceDetectorDetectsSinglePortraitFace(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "portrait-single-face.jpg"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,21 +33,49 @@ func TestPigoFaceDetectorDetectsFace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	detector, err := newPigoFaceDetector(config.DefaultImagePrivacyConfig())
+	detector, err := newYuNetFaceDetector(config.DefaultImagePrivacyConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(detector.Close)
 	faces, err := detector.Detect(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(faces) == 0 {
-		t.Fatal("expected the embedded detector to find a face in the reference image")
+	if len(faces) != 1 {
+		t.Fatalf("expected one face in portrait fixture, got %d: %+v", len(faces), faces)
+	}
+	if !image.Pt(460, 390).In(faces[0]) {
+		t.Fatalf("portrait face does not cover expected center: %+v", faces[0])
+	}
+}
+
+func TestYuNetFaceDetectorRejectsNoFaceFixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "no-face-charger.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detector, err := newYuNetFaceDetector(config.DefaultImagePrivacyConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(detector.Close)
+	faces, err := detector.Detect(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(faces) != 0 {
+		t.Fatalf("expected no faces in charger fixture, got %+v", faces)
 	}
 }
 
 func TestProcessorGeneratesPrivacyVariantsEvenWithoutResizes(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "pigo-sample.jpg"))
+	data, err := os.ReadFile(filepath.Join("testdata", "portrait-single-face.jpg"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +90,7 @@ func TestProcessorGeneratesPrivacyVariantsEvenWithoutResizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.IsImage || result.Width != 320 || result.Height != 400 {
+	if !result.IsImage || result.Width != 768 || result.Height != 1360 {
 		t.Fatalf("unexpected source result: %+v", result)
 	}
 	variants := variantsByKey(result.Variants)
@@ -71,8 +99,8 @@ func TestProcessorGeneratesPrivacyVariantsEvenWithoutResizes(t *testing.T) {
 		if !ok {
 			t.Fatalf("privacy variant %q missing: %+v", key, result.Variants)
 		}
-		if variant.Format != "jpeg" || variant.ContentType != "image/jpeg" || variant.Width != 320 || variant.Height != 400 {
-			t.Fatalf("unexpected variant %q: %+v", key, variant)
+		if variant.Format != "jpeg" || variant.ContentType != "image/jpeg" || variant.Width != result.Width || variant.Height != result.Height {
+			t.Fatalf("unexpected variant %q metadata: format=%q content_type=%q dimensions=%dx%d", key, variant.Format, variant.ContentType, variant.Width, variant.Height)
 		}
 		if len(variant.Data) == 0 || bytes.Equal(variant.Data, data) {
 			t.Fatalf("privacy variant %q was not encoded as a distinct image", key)
@@ -81,7 +109,7 @@ func TestProcessorGeneratesPrivacyVariantsEvenWithoutResizes(t *testing.T) {
 }
 
 func TestProcessorBlursDetectedFaceInReferencePhoto(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "pigo-sample.jpg"))
+	data, err := os.ReadFile(filepath.Join("testdata", "portrait-single-face.jpg"))
 	if err != nil {
 		t.Fatal(err)
 	}

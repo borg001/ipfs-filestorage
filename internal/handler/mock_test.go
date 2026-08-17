@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
+	"github.com/borg001/ipfs-filestorage/internal/imageproc"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 )
@@ -145,8 +146,9 @@ func setupTestHandler(cfg *config.Config) *Handler {
 	cluster := newMockCluster()
 	unpinStore, _ := store.NewUnpinStore("/tmp/test-unpin-store.json")
 	return &Handler{
-		cfg:        cfg,
-		cluster:    cluster,
-		unpinStore: unpinStore,
+		cfg:            cfg,
+		cluster:        cluster,
+		unpinStore:     unpinStore,
+		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
 	}
 }

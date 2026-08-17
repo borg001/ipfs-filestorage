@@ -327,9 +327,9 @@ docker compose up --build -d
 | `IMAGE_RESIZE_POLICY` | `smart-cover` | `fit`, `cover-center`, `smart-cover`. Сейчас `smart-cover` использует center cover и оставлен как точка расширения под face/saliency crop |
 | `IMAGE_BLUR_RADIUS` | `24` | Радиус полного blur-варианта для закрытого изображения |
 | `IMAGE_FACE_BLUR_RADIUS` | `16` | Минимальный радиус blur по каждой найденной области лица |
-| `IMAGE_FACE_DETECTION_MIN_SIZE` | `32` | Минимальный размер лица для локального детектора, px |
-| `IMAGE_FACE_DETECTION_MAX_SIZE` | `0` | Максимальный размер лица, px; `0` означает размер текущего изображения |
 | `IMAGE_FACE_DETECTION_MAX_DIMENSION` | `1280` | Максимальная сторона копии, на которой работает детектор; большие изображения пропорционально уменьшаются только для поиска лиц |
+| `IMAGE_FACE_DETECTION_SCORE_THRESHOLD` | `0.8` | Минимальная confidence YuNet. Более высокий порог уменьшает ложные blur-области, но может пропустить мелкие или повёрнутые лица |
+| `IMAGE_FACE_DETECTION_NMS_THRESHOLD` | `0.3` | Порог NMS YuNet для объединения пересекающихся рамок лиц |
 
 Каждая raster-фотография получает два обязательных privacy-варианта, независимо от `IMAGE_VARIANTS`:
 
@@ -340,7 +340,7 @@ docker compose up --build -d
 
 `blur_faces` — средство визуальной приватности, а не механизм авторизации: распознавание не может гарантировать обнаружение любого лица. Доступ к оригиналу и видео всегда должен решаться вызывающим сервисом; для отказа в доступе он возвращает только `blur` и не раскрывает URL оригинала.
 
-Детектор — встроенный pure-Go `pigo` с classifier-файлом в образе. Во время upload не выполняются запросы к внешним сервисам и не требуется CGO/OpenCV. Лицензионное уведомление находится в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Детектор — встроенная ONNX-модель [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet), запущенная локально через OpenCV `FaceDetectorYN`. Модель и OpenCV runtime входят в Docker-образ, поэтому во время upload не выполняются запросы к внешним сервисам. Для стабильной работы требуется OpenCV 4.10, уже зафиксированный в `Dockerfile`. Лицензионное уведомление находится в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ### Параметры видео
 
@@ -575,8 +575,16 @@ Authorization: Bearer SECRET_KEY_1
 ### Юнит-тесты
 
 ```bash
+# Рекомендуемый способ: фиксированные Go 1.23 и OpenCV 4.10 из Dockerfile.
+docker build --target test .
+
+# Локальный запуск возможен при установленном OpenCV 4.10 и Go 1.23.
 go test ./internal/... -count=1 -v
 ```
+
+YuNet-покрытие включает портрет с одним лицом, изображение без лица, генерацию
+`blur`/`blur_faces` и video poster flow. Фото без лица защищает от возврата
+ложного распознавания объекта как лица.
 
 Покрытие:
 
@@ -585,6 +593,7 @@ go test ./internal/... -count=1 -v
 | `internal/auth/lua` | Disabled, authorize true/false, no function, request fields, timeout, env whitelist/blocked, HTTP request, JSON, syntax error |
 | `internal/auth/static` | Valid key, bearer, no token, invalid key, empty keys |
 | `internal/config` | Дефолты, env-override, невалидные значения, float-парсинг |
+| `internal/imageproc` | YuNet face detection, privacy-варианты, fallback на полный blur, ellipse blur |
 | `internal/handler` | Upload (лимит, oversized, подделка размера), Video upload (no file, wrong ext, too large), Stream (master, segment, 404, deleted) |
 | `internal/ipfs` | Cluster Add/Replicate/Cat/Unpin, Stat (DAG size), countingReader |
 | `internal/middleware` | PanicRecovery, CORS, Chain, Lua fallback, context |

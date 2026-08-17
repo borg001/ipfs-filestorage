@@ -1,16 +1,18 @@
 # Third-party notices
 
-## Pigo face detector
+## YuNet face detector
 
-`github.com/esimov/pigo` v1.4.6 provides the embedded `facefinder` classifier
-and the test fixture in `internal/imageproc/testdata/pigo-sample.jpg`.
+The embedded `internal/imageproc/assets/face_detection_yunet_2023mar.onnx`
+model is distributed by the [OpenCV Zoo YuNet directory](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet).
+The upstream directory licenses all files under MIT. The bundled file is pinned
+to SHA-256 `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`.
 
-Copyright (c) 2018 Endre Simo. Distributed under the MIT License:
+Distributed under the MIT License:
 
 ```text
 MIT License
 
-Copyright (c) 2018 Endre Simo
+Copyright (c) 2020 Shiqi Yu <shiqi.yu@gmail.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
