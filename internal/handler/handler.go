@@ -41,6 +41,7 @@ type Handler struct {
 	unpinStore     *store.UnpinStore
 	unpinWorker    *unpin.Worker
 	imageProcessor *imageproc.Processor
+	mediaAccess    *mediaAccessResolver
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -60,6 +61,7 @@ func NewHandler(cfg *config.Config) *Handler {
 		cluster:        cluster,
 		unpinStore:     unpinStore,
 		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
+		mediaAccess:    newMediaAccessResolver(cfg.MediaAccess),
 	}
 
 	// Запускаем TTL worker
@@ -373,6 +375,11 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	decision, err := h.resolveMediaDelivery(r, cid)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		return
+	}
 
 	manifest, err := h.readManifest(ctx, cid)
 	if err != nil {
@@ -381,17 +388,28 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(parts) == 2 && parts[1] == "bundle" {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		if decision.Managed && decision.Mode != mediaDeliveryOriginal {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected media bundle is unavailable"})
+			return
+		}
+		w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
 		writeJSON(w, http.StatusOK, manifest)
 		return
 	}
 
 	bundlePath := manifest.Original.BundlePath
 	contentType := manifest.Original.ContentType
+	variantKey := ""
 	if len(parts) == 2 && parts[1] != "" {
-		variant, ok := manifest.Variants[parts[1]]
+		variantKey = parts[1]
+	}
+	if decision.Managed && decision.Mode != mediaDeliveryOriginal {
+		variantKey = string(decision.Mode)
+	}
+	if variantKey != "" {
+		variant, ok := manifest.Variants[variantKey]
 		if !ok {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Variant not found"})
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected media variant is unavailable"})
 			return
 		}
 		bundlePath = variant.BundlePath
@@ -419,7 +437,7 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, buffered)
 }

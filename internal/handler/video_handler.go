@@ -21,6 +21,8 @@ type VideoResponse struct {
 	VariantCIDs       map[string]string            `json:"variant_cids"`
 	PosterCIDs        map[string]string            `json:"poster_cids,omitempty"`
 	PrivacyPosterCIDs map[string]map[string]string `json:"privacy_poster_cids,omitempty"`
+	StreamCIDs        []string                     `json:"stream_cids,omitempty"`
+	PosterAliases     map[string]map[string]string `json:"poster_aliases,omitempty"`
 	DurationSec       float64                      `json:"duration_sec"`
 	Status            string                       `json:"status"`
 }
@@ -141,6 +143,8 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		VariantCIDs:       uploadResult.VariantCIDs,
 		PosterCIDs:        uploadResult.PosterCIDs,
 		PrivacyPosterCIDs: uploadResult.PrivacyPosterCIDs,
+		StreamCIDs:        uploadResult.AllCIDs,
+		PosterAliases:     videoPosterAliases(uploadResult.PosterCIDs, uploadResult.PrivacyPosterCIDs),
 		DurationSec:       result.Duration,
 		Status:            "processing_done",
 	}
@@ -166,6 +170,15 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Video not found"})
 		return
 	}
+	decision, err := h.resolveMediaDelivery(r, cid)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		return
+	}
+	if decision.Mode == mediaDeliveryBlur {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
+		return
+	}
 
 	ctx := r.Context()
 	reader, err := h.fetchVideoAsset(ctx, cid)
@@ -176,7 +189,11 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 	defer reader.Close()
 
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
+	if decision.Managed {
+		w.Header().Set("Cache-Control", "private, no-store")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+	}
 	w.WriteHeader(http.StatusOK)
 	writePlaylist(w, reader, playlistAuthSuffix(r.URL.Query()))
 }
@@ -199,6 +216,23 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Segment not found"})
 		return
 	}
+	decision, err := h.resolveMediaDelivery(r, cid)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		return
+	}
+	isPoster := strings.EqualFold(filepath.Ext(path), ".jpg") || strings.EqualFold(filepath.Ext(path), ".jpeg") || strings.EqualFold(filepath.Ext(path), ".webp") || strings.EqualFold(filepath.Ext(path), ".png")
+	if decision.Mode == mediaDeliveryBlur && !isPoster {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
+		return
+	}
+	if isPoster && decision.Mode != mediaDeliveryOriginal {
+		if decision.ReplacementCID == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected poster is unavailable"})
+			return
+		}
+		cid = decision.ReplacementCID
+	}
 
 	ctx := r.Context()
 	reader, err := h.fetchVideoAsset(ctx, cid)
@@ -211,13 +245,35 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 	contentType := streamSegmentContentType(path)
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if decision.Managed {
+		w.Header().Set("Cache-Control", "private, no-store")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+	}
 	w.WriteHeader(http.StatusOK)
 	if contentType == "application/vnd.apple.mpegurl" {
 		writePlaylist(w, reader, playlistAuthSuffix(r.URL.Query()))
 		return
 	}
 	io.Copy(w, reader)
+}
+
+func videoPosterAliases(posters map[string]string, privacy map[string]map[string]string) map[string]map[string]string {
+	aliases := make(map[string]map[string]string)
+	for size, original := range posters {
+		if original == "" {
+			continue
+		}
+		for variant, values := range privacy {
+			if cid := values[size]; cid != "" {
+				if aliases[original] == nil {
+					aliases[original] = make(map[string]string)
+				}
+				aliases[original][variant] = cid
+			}
+		}
+	}
+	return aliases
 }
 
 func streamSegmentContentType(path string) string {
@@ -244,17 +300,22 @@ func (h *Handler) fetchVideoAsset(ctx context.Context, cid string) (io.ReadClose
 }
 
 func playlistAuthSuffix(query url.Values) string {
+	values := url.Values{}
 	key := "token"
 	token := query.Get(key)
 	if token == "" {
 		key = "access_token"
 		token = query.Get(key)
 	}
-	if token == "" {
+	if token != "" {
+		values.Set(key, token)
+	}
+	if mediaLink := query.Get("media_link"); mediaLink != "" {
+		values.Set("media_link", mediaLink)
+	}
+	if len(values) == 0 {
 		return ""
 	}
-	values := url.Values{}
-	values.Set(key, token)
 	return "?" + values.Encode()
 }
 

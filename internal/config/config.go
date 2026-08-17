@@ -10,17 +10,18 @@ import (
 
 // Config holds all configuration for the service.
 type Config struct {
-	Server    ServerConfig
-	IPFS      IPFSConfig
-	API       APIConfig
-	Upload    UploadConfig
-	Image     ImageConfig
-	Pinning   PinningConfig
-	Unpin     UnpinConfig
-	CORS      CORSConfig
-	Video     VideoConfig
-	Auth      AuthConfig
-	RateLimit RateLimitConfig
+	Server      ServerConfig
+	IPFS        IPFSConfig
+	API         APIConfig
+	Upload      UploadConfig
+	Image       ImageConfig
+	Pinning     PinningConfig
+	Unpin       UnpinConfig
+	CORS        CORSConfig
+	Video       VideoConfig
+	Auth        AuthConfig
+	MediaAccess MediaAccessConfig
+	RateLimit   RateLimitConfig
 }
 
 type ServerConfig struct {
@@ -174,6 +175,13 @@ type AuthConfig struct {
 	LuaMaxMemoryMB int
 }
 
+// MediaAccessConfig points to the authenticated generator resource that
+// decides which rendition of profile media a caller may receive.
+type MediaAccessConfig struct {
+	URL       string
+	TimeoutMs int
+}
+
 // RateLimitConfig — настройки rate limiting.
 type RateLimitConfig struct {
 	RPS   float64
@@ -280,6 +288,10 @@ func Load() *Config {
 			LuaTimeoutMs:    getEnvInt("AUTH_LUA_TIMEOUT_MS", 3000),
 			LuaEnvWhitelist: getEnv("AUTH_LUA_ENV_WHITELIST", "AUTH_SERVICE_URL"),
 			LuaMaxMemoryMB:  getEnvInt("AUTH_LUA_MAX_MEMORY_MB", 32),
+		},
+		MediaAccess: MediaAccessConfig{
+			URL:       getEnv("MEDIA_ACCESS_URL", ""),
+			TimeoutMs: clampInt(getEnvInt("MEDIA_ACCESS_TIMEOUT_MS", 2500), 100, 30000),
 		},
 		RateLimit: RateLimitConfig{
 			RPS:   getEnvFloat("RATE_LIMIT_RPS", 10),
