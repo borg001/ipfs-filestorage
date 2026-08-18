@@ -81,7 +81,8 @@ POST /upload → storage1 → ipfs1.Add() → CID → 200 response
 ```
 POST /upload-video (video.mp4)
   ├→ validate: ffprobe — размер, длительность ≤60с, пропорции 9:16
-  ├→ transcode: ffmpeg — 3 варианта (low/medium/high), fMP4 CMAF
+  ├→ transcode: ffmpeg — poster JPEG + 3 варианта (low/medium/high), fMP4 CMAF
+  ├→ privacy posters: blur + blur_faces локальным face detector
   ├→ upload: каждый чанк → IPFS → CID
   ├→ rewrite: плейлисты переписываются — ссылки на CID
   ├→ replicate: все CID реплицируются на все ноды
@@ -185,7 +186,7 @@ end
 
 - 📤 Загрузка одного файла — `POST /upload`
 - 📦 Массовая загрузка — `POST /upload-multiple`
-- 🖼 Image bundles — оригинал + настроенные размеры (`/file/{cid}/{size}`) с metadata manifest
+- 🖼 Image bundles — оригинал, privacy-копии и настроенные размеры (`/file/{cid}/{size}`) с metadata manifest
 - 🎬 Видео-стриминг — `POST /upload-video` → адаптивный HLS (3 качества)
 - 📺 Воспроизведение — `GET /stream/{cid}/master.m3u8`
 - 📥 Скачивание по CID — `GET /file/{cid}`
@@ -260,13 +261,17 @@ curl -s -X POST http://localhost:8081/upload-video \
 # Ответ:
 # {
 #   "master_cid": "QmAbCd...",
-#   "variants": {
+#   "variant_cids": {
 #     "low": "QmLo1...",
 #     "medium": "QmLo2...",
 #     "high": "QmLo3..."
 #   },
-#   "all_cids": ["QmAbCd...", "QmLo1...", ...],
-#   "pinned": true
+#   "poster_cids": {"180x320": "QmPoster..."},
+#   "privacy_poster_cids": {
+#     "blur": {"180x320": "QmBlurPoster..."},
+#     "blur_faces": {"180x320": "QmFaceBlurPoster..."}
+#   },
+#   "status": "processing_done"
 # }
 
 # Воспроизвести в HLS-плеере (hls.js, VLC, ffplay)
@@ -320,6 +325,22 @@ docker compose up --build -d
 | `IMAGE_JPEG_QUALITY` | `82` | Качество JPEG variants, 1-100 |
 | `IMAGE_WEBP_QUALITY` | `82` | Качество WebP variants, 1-100 |
 | `IMAGE_RESIZE_POLICY` | `smart-cover` | `fit`, `cover-center`, `smart-cover`. Сейчас `smart-cover` использует center cover и оставлен как точка расширения под face/saliency crop |
+| `IMAGE_BLUR_RADIUS` | `24` | Радиус полного blur-варианта для закрытого изображения |
+| `IMAGE_FACE_BLUR_RADIUS` | `16` | Минимальный радиус blur по каждой найденной области лица |
+| `IMAGE_FACE_DETECTION_MAX_DIMENSION` | `1280` | Максимальная сторона копии, на которой работает детектор; большие изображения пропорционально уменьшаются только для поиска лиц |
+| `IMAGE_FACE_DETECTION_SCORE_THRESHOLD` | `0.8` | Минимальная confidence YuNet. Более высокий порог уменьшает ложные blur-области, но может пропустить мелкие или повёрнутые лица |
+| `IMAGE_FACE_DETECTION_NMS_THRESHOLD` | `0.3` | Порог NMS YuNet для объединения пересекающихся рамок лиц |
+
+Каждая raster-фотография получает два обязательных privacy-варианта, независимо от `IMAGE_VARIANTS`:
+
+| Ключ | URL | Назначение |
+|---|---|---|
+| `blur` | `/file/{cid}/blur` | Полностью размытая копия. Её нужно использовать при отсутствии права на просмотр оригинала. |
+| `blur_faces` | `/file/{cid}/blur_faces` | Копия с размытыми областями лиц, найденных локальным детектором. Если лицо не найдено, вариант безопасно становится полным `blur`. |
+
+`blur_faces` — средство визуальной приватности, а не механизм авторизации: распознавание не может гарантировать обнаружение любого лица. Доступ к оригиналу и видео всегда должен решаться вызывающим сервисом; для отказа в доступе он возвращает только `blur` и не раскрывает URL оригинала.
+
+Детектор — встроенная ONNX-модель [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet), запущенная локально через OpenCV `FaceDetectorYN`. Модель и OpenCV runtime входят в Docker-образ, поэтому во время upload не выполняются запросы к внешним сервисам. Для стабильной работы требуется OpenCV 4.10, уже зафиксированный в `Dockerfile`. Лицензионное уведомление находится в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ### Параметры видео
 
@@ -355,13 +376,17 @@ docker compose up --build -d
 GET /config
 ```
 
-Возвращает публичные возможности сервиса. Сейчас содержит секцию `image`, по которой клиенты могут понять доступные размеры и шаблоны URL.
+Возвращает публичные возможности сервиса. Секция `image` описывает доступные размеры, privacy-варианты и шаблоны URL.
 
 ```json
 {
   "image": {
     "enabled": true,
     "variants": [{"key": "100x100", "width": 100, "height": 100}],
+    "privacy_variants": [
+      {"key": "blur", "purpose": "full_image_blur"},
+      {"key": "blur_faces", "purpose": "detected_faces_blur", "fallback": "blur"}
+    ],
     "output_format": "auto",
     "jpeg_progressive": true,
     "resize_policy": "smart-cover",
@@ -407,6 +432,24 @@ Authorization: Bearer SECRET_KEY_1
       "width": 100,
       "height": 100,
       "size": 8920
+    },
+    "blur": {
+      "path": "/file/QmXyZ.../blur",
+      "bundle_path": "blur.webp",
+      "format": "webp",
+      "content_type": "image/webp",
+      "width": 1200,
+      "height": 900,
+      "size": 34120
+    },
+    "blur_faces": {
+      "path": "/file/QmXyZ.../blur_faces",
+      "bundle_path": "blur_faces.webp",
+      "format": "webp",
+      "content_type": "image/webp",
+      "width": 1200,
+      "height": 900,
+      "size": 49510
     }
   }
 }
@@ -414,7 +457,7 @@ Authorization: Bearer SECRET_KEY_1
 
 Размер в ответе — реальный размер прочитанных сервером байтов, а не заголовок от клиента.
 
-`cid` в ответе — это root CID bundle-директории. Для любых типов файлов внутри bundle хранится `original` и `manifest.json`. Для изображений дополнительно сохраняются настроенные variants.
+`cid` в ответе — это root CID bundle-директории. Для любых типов файлов внутри bundle хранится `original` и `manifest.json`. Для изображений дополнительно сохраняются privacy-варианты и настроенные размеры.
 
 ### Массовая загрузка
 
@@ -444,14 +487,29 @@ Authorization: Bearer SECRET_KEY_1
 ```json
 {
   "master_cid": "QmAbCd...",
-  "variants": {
+  "variant_cids": {
     "low": "QmLo1...",
     "medium": "QmLo2...",
     "high": "QmLo3..."
   },
-  "all_cids": ["QmAbCd...", "QmLo1...", "QmLo2...", "QmLo3...", "..."],
-  "pinned": true
+  "poster_cids": {
+    "180x320": "QmPoster..."
+  },
+  "privacy_poster_cids": {
+    "blur": {"180x320": "QmBlurPoster..."},
+    "blur_faces": {"180x320": "QmFaceBlurPoster..."}
+  },
+  "duration_sec": 11.4,
+  "status": "processing_done"
 }
+```
+
+Каждый poster получает те же `blur` и `blur_faces` копии, что и фотография. В master playlist оригинальные poster-записи сохраняют прежний формат, а privacy-варианты добавляются отдельными строками:
+
+```text
+#EXT-X-IAMFREE-POSTER:SIZE=180x320,URI="../segment/QmPoster.jpg"
+#EXT-X-IAMFREE-POSTER:VARIANT=blur,SIZE=180x320,URI="../segment/QmBlurPoster.jpg"
+#EXT-X-IAMFREE-POSTER:VARIANT=blur_faces,SIZE=180x320,URI="../segment/QmFaceBlurPoster.jpg"
 ```
 
 ### Стриминг видео
@@ -517,8 +575,16 @@ Authorization: Bearer SECRET_KEY_1
 ### Юнит-тесты
 
 ```bash
+# Рекомендуемый способ: фиксированные Go 1.23 и OpenCV 4.10 из Dockerfile.
+docker build --target test .
+
+# Локальный запуск возможен при установленном OpenCV 4.10 и Go 1.23.
 go test ./internal/... -count=1 -v
 ```
+
+YuNet-покрытие включает портрет с одним лицом, изображение без лица, генерацию
+`blur`/`blur_faces` и video poster flow. Фото без лица защищает от возврата
+ложного распознавания объекта как лица.
 
 Покрытие:
 
@@ -527,6 +593,7 @@ go test ./internal/... -count=1 -v
 | `internal/auth/lua` | Disabled, authorize true/false, no function, request fields, timeout, env whitelist/blocked, HTTP request, JSON, syntax error |
 | `internal/auth/static` | Valid key, bearer, no token, invalid key, empty keys |
 | `internal/config` | Дефолты, env-override, невалидные значения, float-парсинг |
+| `internal/imageproc` | YuNet face detection, privacy-варианты, fallback на полный blur, ellipse blur |
 | `internal/handler` | Upload (лимит, oversized, подделка размера), Video upload (no file, wrong ext, too large), Stream (master, segment, 404, deleted) |
 | `internal/ipfs` | Cluster Add/Replicate/Cat/Unpin, Stat (DAG size), countingReader |
 | `internal/middleware` | PanicRecovery, CORS, Chain, Lua fallback, context |

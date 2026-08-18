@@ -73,6 +73,8 @@ func TestUploadDirWithFiles(t *testing.T) {
 	os.MkdirAll(medDir, 0755)
 	os.MkdirAll(highDir, 0755)
 	os.MkdirAll(postersDir, 0755)
+	os.MkdirAll(filepath.Join(postersDir, "blur"), 0755)
+	os.MkdirAll(filepath.Join(postersDir, "blur_faces"), 0755)
 
 	playlist := "#EXTM3U\n#EXT-X-VERSION:6\n#EXTINF:4.000,\nseg_0.m4s\n#EXT-X-ENDLIST\n"
 	os.WriteFile(filepath.Join(lowDir, "playlist.m3u8"), []byte(playlist), 0644)
@@ -83,6 +85,8 @@ func TestUploadDirWithFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(highDir, "seg_0.m4s"), []byte("fake-segment-data-high"), 0644)
 	os.WriteFile(filepath.Join(postersDir, "180x320.jpg"), []byte("fake-poster-small"), 0644)
 	os.WriteFile(filepath.Join(postersDir, "720x1280.jpg"), []byte("fake-poster-large"), 0644)
+	os.WriteFile(filepath.Join(postersDir, "blur", "180x320.jpg"), []byte("fake-blur-poster-small"), 0644)
+	os.WriteFile(filepath.Join(postersDir, "blur_faces", "180x320.jpg"), []byte("fake-face-blur-poster-small"), 0644)
 
 	adder := &mockAdder{}
 	u := NewUploader(adder)
@@ -108,6 +112,12 @@ func TestUploadDirWithFiles(t *testing.T) {
 	}
 	if result.PosterCIDs["180x320"] == "" {
 		t.Error("Expected 180x320 poster CID")
+	}
+	if result.PrivacyPosterCIDs["blur"]["180x320"] == "" {
+		t.Errorf("Expected blur privacy poster CID, got %+v", result.PrivacyPosterCIDs)
+	}
+	if result.PrivacyPosterCIDs["blur_faces"]["180x320"] == "" {
+		t.Errorf("Expected blur_faces privacy poster CID, got %+v", result.PrivacyPosterCIDs)
 	}
 	if adder.getCallCount() < 7 {
 		t.Errorf("Expected at least 7 Add calls, got %d", adder.getCallCount())
@@ -304,9 +314,11 @@ func TestBuildMasterPlaylistPosters(t *testing.T) {
 		"low": "QmLow",
 	}
 	fileCIDs := map[string]string{
-		"posters/720x1280.jpg": "QmPosterLarge",
-		"posters/180x320.jpg":  "QmPosterSmall",
-		"low/seg_0.m4s":        "QmSeg",
+		"posters/720x1280.jpg":           "QmPosterLarge",
+		"posters/180x320.jpg":            "QmPosterSmall",
+		"posters/blur/180x320.jpg":       "QmPosterBlur",
+		"posters/blur_faces/180x320.jpg": "QmPosterFaceBlur",
+		"low/seg_0.m4s":                  "QmSeg",
 	}
 
 	content, err := u.buildMasterPlaylist(variantCIDs, fileCIDs)
@@ -328,6 +340,33 @@ func TestBuildMasterPlaylistPosters(t *testing.T) {
 	}
 	if largeIdx >= streamIdx {
 		t.Error("Poster tags should come before stream variants")
+	}
+	if !strings.Contains(content, `#EXT-X-IAMFREE-POSTER:VARIANT=blur,SIZE=180x320,URI="../segment/QmPosterBlur.jpg"`) {
+		t.Error("Missing blur privacy poster tag")
+	}
+	if !strings.Contains(content, `#EXT-X-IAMFREE-POSTER:VARIANT=blur_faces,SIZE=180x320,URI="../segment/QmPosterFaceBlur.jpg"`) {
+		t.Error("Missing blur_faces privacy poster tag")
+	}
+}
+
+func TestPosterFromPath(t *testing.T) {
+	tests := []struct {
+		path    string
+		variant string
+		size    string
+		ok      bool
+	}{
+		{path: "posters/180x320.jpg", size: "180x320", ok: true},
+		{path: "posters/blur/180x320.jpg", variant: "blur", size: "180x320", ok: true},
+		{path: "posters/blur_faces/720x1280.jpg", variant: "blur_faces", size: "720x1280", ok: true},
+		{path: "posters/blur/extra/180x320.jpg", ok: false},
+		{path: "posters/180x320.png", ok: false},
+	}
+	for _, tt := range tests {
+		poster, ok := posterFromPath(tt.path)
+		if ok != tt.ok || poster.variant != tt.variant || poster.size != tt.size {
+			t.Errorf("posterFromPath(%q) = %+v, %t; want variant=%q size=%q ok=%t", tt.path, poster, ok, tt.variant, tt.size, tt.ok)
+		}
 	}
 }
 

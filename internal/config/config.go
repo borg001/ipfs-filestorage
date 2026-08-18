@@ -10,17 +10,18 @@ import (
 
 // Config holds all configuration for the service.
 type Config struct {
-	Server    ServerConfig
-	IPFS      IPFSConfig
-	API       APIConfig
-	Upload    UploadConfig
-	Image     ImageConfig
-	Pinning   PinningConfig
-	Unpin     UnpinConfig
-	CORS      CORSConfig
-	Video     VideoConfig
-	Auth      AuthConfig
-	RateLimit RateLimitConfig
+	Server      ServerConfig
+	IPFS        IPFSConfig
+	API         APIConfig
+	Upload      UploadConfig
+	Image       ImageConfig
+	Pinning     PinningConfig
+	Unpin       UnpinConfig
+	CORS        CORSConfig
+	Video       VideoConfig
+	Auth        AuthConfig
+	MediaAccess MediaAccessConfig
+	RateLimit   RateLimitConfig
 }
 
 type ServerConfig struct {
@@ -50,6 +51,62 @@ type ImageVariant struct {
 	Height int    `json:"height"`
 }
 
+const (
+	// PrivacyBlurVariantKey is the full-image blur variant. It is safe to use
+	// as a restricted-media preview only when the original URL is not exposed.
+	PrivacyBlurVariantKey = "blur"
+	// PrivacyFaceBlurVariantKey masks detected faces while preserving the rest
+	// of the image for contexts where the full image remains visible.
+	PrivacyFaceBlurVariantKey = "blur_faces"
+)
+
+type ImagePrivacyConfig struct {
+	// BlurRadius is the radius used for the whole-image restricted preview.
+	BlurRadius int
+	// FaceBlurRadius is the minimum radius used for every detected face.
+	FaceBlurRadius int
+	// FaceDetectionMaxDimension bounds detector work by downscaling the input.
+	FaceDetectionMaxDimension int
+	// FaceDetectionScoreThreshold rejects low-confidence YuNet detections.
+	FaceDetectionScoreThreshold float64
+	// FaceDetectionNMSThreshold controls YuNet non-maximum suppression.
+	FaceDetectionNMSThreshold float64
+}
+
+func DefaultImagePrivacyConfig() ImagePrivacyConfig {
+	return ImagePrivacyConfig{
+		BlurRadius:                  24,
+		FaceBlurRadius:              16,
+		FaceDetectionMaxDimension:   1280,
+		FaceDetectionScoreThreshold: 0.8,
+		FaceDetectionNMSThreshold:   0.3,
+	}
+}
+
+// NormalizeImagePrivacyConfig gives programmatic configs the same safe defaults
+// as environment-based configuration.
+func NormalizeImagePrivacyConfig(value ImagePrivacyConfig) ImagePrivacyConfig {
+	defaults := DefaultImagePrivacyConfig()
+	if value.BlurRadius <= 0 {
+		value.BlurRadius = defaults.BlurRadius
+	}
+	if value.FaceBlurRadius <= 0 {
+		value.FaceBlurRadius = defaults.FaceBlurRadius
+	}
+	if value.FaceDetectionMaxDimension <= 0 {
+		value.FaceDetectionMaxDimension = defaults.FaceDetectionMaxDimension
+	}
+	if value.FaceDetectionScoreThreshold <= 0 {
+		value.FaceDetectionScoreThreshold = defaults.FaceDetectionScoreThreshold
+	}
+	if value.FaceDetectionNMSThreshold <= 0 {
+		value.FaceDetectionNMSThreshold = defaults.FaceDetectionNMSThreshold
+	}
+	value.FaceDetectionScoreThreshold = clampFloat(value.FaceDetectionScoreThreshold, 0.1, 0.99)
+	value.FaceDetectionNMSThreshold = clampFloat(value.FaceDetectionNMSThreshold, 0.1, 0.99)
+	return value
+}
+
 type ImageConfig struct {
 	ProcessingEnabled bool
 	Variants          []ImageVariant
@@ -58,6 +115,7 @@ type ImageConfig struct {
 	JPEGQuality       int
 	WebPQuality       int
 	ResizePolicy      string
+	Privacy           ImagePrivacyConfig
 }
 
 type PinningConfig struct {
@@ -115,6 +173,13 @@ type AuthConfig struct {
 	LuaEnvWhitelist string
 	// LuaMaxMemoryMB is the max VM memory in megabytes.
 	LuaMaxMemoryMB int
+}
+
+// MediaAccessConfig points to the authenticated generator resource that
+// decides which rendition of profile media a caller may receive.
+type MediaAccessConfig struct {
+	URL       string
+	TimeoutMs int
 }
 
 // RateLimitConfig — настройки rate limiting.
@@ -178,6 +243,13 @@ func Load() *Config {
 			JPEGQuality:     clampInt(getEnvInt("IMAGE_JPEG_QUALITY", 82), 1, 100),
 			WebPQuality:     clampInt(getEnvInt("IMAGE_WEBP_QUALITY", 82), 1, 100),
 			ResizePolicy:    validateChoice(getEnv("IMAGE_RESIZE_POLICY", "smart-cover"), []string{"fit", "cover-center", "smart-cover"}, "smart-cover"),
+			Privacy: ImagePrivacyConfig{
+				BlurRadius:                  clampInt(getEnvInt("IMAGE_BLUR_RADIUS", 24), 1, 64),
+				FaceBlurRadius:              clampInt(getEnvInt("IMAGE_FACE_BLUR_RADIUS", 16), 1, 64),
+				FaceDetectionMaxDimension:   clampInt(getEnvInt("IMAGE_FACE_DETECTION_MAX_DIMENSION", 1280), 128, 4096),
+				FaceDetectionScoreThreshold: clampFloat(getEnvFloat("IMAGE_FACE_DETECTION_SCORE_THRESHOLD", 0.8), 0.1, 0.99),
+				FaceDetectionNMSThreshold:   clampFloat(getEnvFloat("IMAGE_FACE_DETECTION_NMS_THRESHOLD", 0.3), 0.1, 0.99),
+			},
 		},
 		Pinning: PinningConfig{
 			Retries:      getEnvInt("PINNING_RETRIES", 3),
@@ -216,6 +288,10 @@ func Load() *Config {
 			LuaTimeoutMs:    getEnvInt("AUTH_LUA_TIMEOUT_MS", 3000),
 			LuaEnvWhitelist: getEnv("AUTH_LUA_ENV_WHITELIST", "AUTH_SERVICE_URL"),
 			LuaMaxMemoryMB:  getEnvInt("AUTH_LUA_MAX_MEMORY_MB", 32),
+		},
+		MediaAccess: MediaAccessConfig{
+			URL:       getEnv("MEDIA_ACCESS_URL", ""),
+			TimeoutMs: clampInt(getEnvInt("MEDIA_ACCESS_TIMEOUT_MS", 2500), 100, 30000),
 		},
 		RateLimit: RateLimitConfig{
 			RPS:   getEnvFloat("RATE_LIMIT_RPS", 10),
@@ -289,6 +365,16 @@ func validateChoice(value string, allowed []string, def string) string {
 }
 
 func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func clampFloat(value, min, max float64) float64 {
 	if value < min {
 		return min
 	}

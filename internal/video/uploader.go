@@ -20,11 +20,12 @@ type IPFSAdder interface {
 
 // UploadResult — результат загрузки видео-чанков в IPFS.
 type UploadResult struct {
-	MasterCID   string            `json:"master_cid"`
-	VariantCIDs map[string]string `json:"variant_cids"`
-	SegmentCIDs map[string]string `json:"segment_cids"`
-	PosterCIDs  map[string]string `json:"poster_cids"`
-	AllCIDs     []string          `json:"all_cids"`
+	MasterCID         string                       `json:"master_cid"`
+	VariantCIDs       map[string]string            `json:"variant_cids"`
+	SegmentCIDs       map[string]string            `json:"segment_cids"`
+	PosterCIDs        map[string]string            `json:"poster_cids"`
+	PrivacyPosterCIDs map[string]map[string]string `json:"privacy_poster_cids"`
+	AllCIDs           []string                     `json:"all_cids"`
 }
 
 // Uploader загружает сгенерированную HLS-структуру в IPFS.
@@ -40,9 +41,10 @@ func NewUploader(adder IPFSAdder) *Uploader {
 // UploadDir обходит outputDir и загружает все файлы в IPFS.
 func (u *Uploader) UploadDir(ctx context.Context, outputDir string) (*UploadResult, error) {
 	result := &UploadResult{
-		VariantCIDs: make(map[string]string),
-		SegmentCIDs: make(map[string]string),
-		PosterCIDs:  make(map[string]string),
+		VariantCIDs:       make(map[string]string),
+		SegmentCIDs:       make(map[string]string),
+		PosterCIDs:        make(map[string]string),
+		PrivacyPosterCIDs: make(map[string]map[string]string),
 	}
 
 	if u.adder == nil {
@@ -123,8 +125,15 @@ func (u *Uploader) UploadDir(ctx context.Context, outputDir string) (*UploadResu
 		if strings.HasSuffix(relPath, ".m4s") {
 			result.SegmentCIDs[relPath] = cid
 		}
-		if size, ok := posterSizeFromPath(relPath); ok {
-			result.PosterCIDs[size] = cid
+		if poster, ok := posterFromPath(relPath); ok {
+			if poster.variant == "" {
+				result.PosterCIDs[poster.size] = cid
+				continue
+			}
+			if result.PrivacyPosterCIDs[poster.variant] == nil {
+				result.PrivacyPosterCIDs[poster.variant] = make(map[string]string)
+			}
+			result.PrivacyPosterCIDs[poster.variant][poster.size] = cid
 		}
 	}
 
@@ -172,7 +181,11 @@ func (u *Uploader) buildMasterPlaylist(variantCIDs map[string]string, fileCIDs m
 	b.WriteString("#EXTM3U\n")
 
 	for _, poster := range collectPosters(fileCIDs) {
-		b.WriteString(fmt.Sprintf("#EXT-X-IAMFREE-POSTER:SIZE=%s,URI=\"../segment/%s.jpg\"\n", poster.size, poster.cid))
+		if poster.variant == "" {
+			b.WriteString(fmt.Sprintf("#EXT-X-IAMFREE-POSTER:SIZE=%s,URI=\"../segment/%s.jpg\"\n", poster.size, poster.cid))
+			continue
+		}
+		b.WriteString(fmt.Sprintf("#EXT-X-IAMFREE-POSTER:VARIANT=%s,SIZE=%s,URI=\"../segment/%s.jpg\"\n", poster.variant, poster.size, poster.cid))
 	}
 
 	order := []string{"low", "medium", "high"}
@@ -202,8 +215,9 @@ func (u *Uploader) buildMasterPlaylist(variantCIDs map[string]string, fileCIDs m
 }
 
 type posterEntry struct {
-	size string
-	cid  string
+	variant string
+	size    string
+	cid     string
 }
 
 func collectPosters(fileCIDs map[string]string) []posterEntry {
@@ -212,28 +226,50 @@ func collectPosters(fileCIDs map[string]string) []posterEntry {
 	}
 	posters := make([]posterEntry, 0)
 	for relPath, cid := range fileCIDs {
-		size, ok := posterSizeFromPath(relPath)
+		poster, ok := posterFromPath(relPath)
 		if !ok {
 			continue
 		}
-		posters = append(posters, posterEntry{size: size, cid: cid})
+		posters = append(posters, posterEntry{variant: poster.variant, size: poster.size, cid: cid})
 	}
 	sort.Slice(posters, func(i, j int) bool {
+		if posters[i].variant != posters[j].variant {
+			return posters[i].variant < posters[j].variant
+		}
 		return posterArea(posters[i].size) < posterArea(posters[j].size)
 	})
 	return posters
 }
 
+type posterPath struct {
+	variant string
+	size    string
+}
+
 func posterSizeFromPath(relPath string) (string, bool) {
+	poster, ok := posterFromPath(relPath)
+	return poster.size, ok
+}
+
+func posterFromPath(relPath string) (posterPath, bool) {
 	relPath = filepath.ToSlash(relPath)
 	if !strings.HasPrefix(relPath, "posters/") || !strings.HasSuffix(strings.ToLower(relPath), ".jpg") {
-		return "", false
+		return posterPath{}, false
 	}
-	size := strings.TrimSuffix(strings.TrimPrefix(relPath, "posters/"), filepath.Ext(relPath))
+	path := strings.TrimPrefix(relPath, "posters/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 1 && len(parts) != 2 {
+		return posterPath{}, false
+	}
+	size := strings.TrimSuffix(parts[len(parts)-1], filepath.Ext(path))
 	if size == "" {
-		return "", false
+		return posterPath{}, false
 	}
-	return size, true
+	variant := ""
+	if len(parts) == 2 {
+		variant = parts[0]
+	}
+	return posterPath{variant: variant, size: size}, true
 }
 
 func posterArea(size string) int {

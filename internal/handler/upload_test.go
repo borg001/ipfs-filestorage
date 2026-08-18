@@ -175,6 +175,15 @@ func TestHandleUpload_ImageBundleVariants(t *testing.T) {
 	if variant.ContentType != "image/jpeg" || variant.Width != 100 || variant.Height != 100 {
 		t.Fatalf("Variant metadata = %+v, want image/jpeg 100x100", variant)
 	}
+	for _, key := range []string{config.PrivacyBlurVariantKey, config.PrivacyFaceBlurVariantKey} {
+		privacyVariant, ok := resp.Variants[key]
+		if !ok {
+			t.Fatalf("Privacy variant %q missing: %+v", key, resp.Variants)
+		}
+		if privacyVariant.ContentType != "image/jpeg" || privacyVariant.Width != 200 || privacyVariant.Height != 120 {
+			t.Fatalf("Privacy variant %q metadata = %+v, want image/jpeg 200x120", key, privacyVariant)
+		}
+	}
 
 	bundleReq := httptest.NewRequest(http.MethodGet, "/file/"+resp.CID+"/bundle", nil)
 	bundleW := httptest.NewRecorder()
@@ -205,5 +214,22 @@ func TestHandleUpload_ImageBundleVariants(t *testing.T) {
 	}
 	if cfgJPEG.Width != 100 || cfgJPEG.Height != 100 {
 		t.Fatalf("Variant dimensions = %dx%d, want 100x100", cfgJPEG.Width, cfgJPEG.Height)
+	}
+
+	privacyReq := httptest.NewRequest(http.MethodGet, "/file/"+resp.CID+"/"+config.PrivacyBlurVariantKey, nil)
+	privacyW := httptest.NewRecorder()
+	h.HandleFile(privacyW, privacyReq)
+	if privacyW.Code != http.StatusOK {
+		t.Fatalf("Privacy variant status = %d, want 200, body: %s", privacyW.Code, privacyW.Body.String())
+	}
+	if got := privacyW.Header().Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("Privacy variant Content-Type = %q, want image/jpeg", got)
+	}
+	privacyJPEG, err := jpeg.DecodeConfig(bytes.NewReader(privacyW.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privacyJPEG.Width != 200 || privacyJPEG.Height != 120 {
+		t.Fatalf("Privacy variant dimensions = %dx%d, want 200x120", privacyJPEG.Width, privacyJPEG.Height)
 	}
 }
