@@ -1,6 +1,7 @@
 package ipfs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -32,20 +33,92 @@ func NewCluster(nodeURLs []string) *ClusterManager {
 	return m
 }
 
-// ClusterAdd загружает файл на первую доступную ноду и возвращает CID.
+// ClusterAdd загружает файл на все ноды и возвращает общий CID.
+// Прямая запись не зависит от provider discovery и Bitswap, поэтому новая
+// загрузка доступна для последующего pin на каждой ноде сразу.
 func (cm *ClusterManager) ClusterAdd(ctx context.Context, filename string, data io.Reader) (*AddResult, error) {
 	if len(cm.nodes) == 0 {
 		return nil, fmt.Errorf("no IPFS nodes in cluster")
 	}
-	return cm.nodes[0].Add(ctx, filename, data)
+
+	payload, err := io.ReadAll(data)
+	if err != nil {
+		return nil, fmt.Errorf("read cluster add payload: %w", err)
+	}
+
+	results := make([]*AddResult, len(cm.nodes))
+	errCh := make(chan error, len(cm.nodes))
+	var wg sync.WaitGroup
+	for i, node := range cm.nodes {
+		wg.Add(1)
+		go func(index int, n *ClusterNode) {
+			defer wg.Done()
+			result, err := n.Add(ctx, filename, bytes.NewReader(payload))
+			if err != nil {
+				errCh <- fmt.Errorf("add failed on %s: %w", n.URL, err)
+				return
+			}
+			results[index] = result
+		}(i, node)
+	}
+	wg.Wait()
+	close(errCh)
+
+	if err := collectClusterErrors("cluster add", len(cm.nodes), errCh); err != nil {
+		return nil, err
+	}
+	for i := 1; i < len(results); i++ {
+		if results[i].CID != results[0].CID {
+			return nil, fmt.Errorf("cluster add CID mismatch: %s returned %s, expected %s", cm.nodes[i].URL, results[i].CID, results[0].CID)
+		}
+	}
+	return results[0], nil
 }
 
-// ClusterAddDir загружает директорию на первую доступную ноду и возвращает root CID.
+// ClusterAddDir загружает директорию на все ноды и возвращает общий root CID.
 func (cm *ClusterManager) ClusterAddDir(ctx context.Context, files map[string][]byte) (*AddResult, error) {
 	if len(cm.nodes) == 0 {
 		return nil, fmt.Errorf("no IPFS nodes in cluster")
 	}
-	return cm.nodes[0].AddDir(ctx, files)
+
+	results := make([]*AddResult, len(cm.nodes))
+	errCh := make(chan error, len(cm.nodes))
+	var wg sync.WaitGroup
+	for i, node := range cm.nodes {
+		wg.Add(1)
+		go func(index int, n *ClusterNode) {
+			defer wg.Done()
+			result, err := n.AddDir(ctx, files)
+			if err != nil {
+				errCh <- fmt.Errorf("add dir failed on %s: %w", n.URL, err)
+				return
+			}
+			results[index] = result
+		}(i, node)
+	}
+	wg.Wait()
+	close(errCh)
+
+	if err := collectClusterErrors("cluster add dir", len(cm.nodes), errCh); err != nil {
+		return nil, err
+	}
+	for i := 1; i < len(results); i++ {
+		if results[i].CID != results[0].CID {
+			return nil, fmt.Errorf("cluster add dir CID mismatch: %s returned %s, expected %s", cm.nodes[i].URL, results[i].CID, results[0].CID)
+		}
+	}
+	return results[0], nil
+}
+
+func collectClusterErrors(operation string, nodeCount int, errCh <-chan error) error {
+	errs := make([]error, 0)
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s errors (%d/%d): %v", operation, len(errs), nodeCount, errs)
 }
 
 // ClusterCat читает файл по CID, пытаясь последовательно все ноды.

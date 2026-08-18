@@ -56,14 +56,16 @@ HTTP-сервис для децентрализованного хранения
 ### Репликация
 
 ```
-POST /upload → storage1 → ipfs1.Add() → CID → 200 response
-                                       ↓
-                         async ClusterReplicate(CID):
-                           ├→ ipfs1: Fetch(Cat+drain) + Pin  (локально — быстро)
-                           └→ ipfs2: Fetch(Cat+drain) + Pin  (bitswap через DHT)
+POST /upload → storage1 → ClusterAdd(payload)
+                              ├→ ipfs1.Add() ─┐
+                              └→ ipfs2.Add() ─┴→ одинаковый CID → 200 response
+                                                    ↓
+                                      async ClusterReplicate(CID):
+                                        ├→ ipfs1: verify + Pin
+                                        └→ ipfs2: verify + Pin
 ```
 
-Ключевое: `Fetch()` вызывает `Cat()` и вычитывает весь поток. Это заставляет bitswap подтянуть ВСЕ блоки DAG с ноды-источника. После этого `Pin()` гарантирует, что данные физически на ноде. Без Fetch — Pin создаст маркер без реальных данных. Для обычных upload-эндпоинтов репликация запускается асинхронно, чтобы клиент сразу получил CID; видео по-прежнему дожидается репликации всех связанных CID.
+`ClusterAdd()` и `ClusterAddDir()` напрямую записывают данные на каждую настроенную ноду и проверяют, что все ноды вернули одинаковый CID. Поэтому новая загрузка не зависит от задержек provider discovery или Bitswap. После записи `ClusterReplicate()` проверяет доступность и фиксирует CID через recursive pin. Для обычных upload-эндпоинтов pin запускается асинхронно, чтобы клиент сразу получил CID; видео дожидается pin всех связанных CID.
 
 ### Мягкое удаление
 
