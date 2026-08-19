@@ -208,11 +208,12 @@ func Load() *Config {
 		},
 		Upload: UploadConfig{
 			MaxFileSize:       getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
-			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "pdf", "doc", "docx", "zip", "json", "html", "txt", "mp4", "mov", "webm", "avi"}),
+			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "jpeg", "webp", "pdf", "doc", "docx", "zip", "json", "html", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
 			AllowedMimeTypes: map[string]bool{
 				"image/png":          true,
 				"image/svg+xml":      true,
 				"image/jpeg":         true,
+				"image/webp":         true,
 				"application/pdf":    true,
 				"application/msword": true,
 				"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
@@ -226,6 +227,7 @@ func Load() *Config {
 				"video/quicktime":           true,
 				"video/webm":                true,
 				"video/x-msvideo":           true,
+				"video/x-matroska":          true,
 			},
 		},
 		Image: ImageConfig{

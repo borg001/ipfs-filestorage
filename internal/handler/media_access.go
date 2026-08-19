@@ -30,6 +30,8 @@ type mediaDeliveryDecision struct {
 	Mode           mediaDeliveryMode
 	Managed        bool
 	ReplacementCID string
+	SourceCID      string
+	PosterCID      string
 }
 
 func newMediaAccessResolver(cfg config.MediaAccessConfig) *mediaAccessResolver {
@@ -48,15 +50,40 @@ func newMediaAccessResolver(cfg config.MediaAccessConfig) *mediaAccessResolver {
 // This retains normal storage behavior for chat attachments and every future
 // non-profile media use while making managed content fail closed on API errors.
 func (r *mediaAccessResolver) Resolve(ctx context.Context, source *http.Request, cid string) (mediaDeliveryDecision, error) {
+	return r.resolve(ctx, source, cid, "")
+}
+
+// ResolveLink resolves an opaque media_links ID through the internal API.
+// The storage server is then the only process that sees the backing CID.
+func (r *mediaAccessResolver) ResolveLink(ctx context.Context, source *http.Request, mediaLink string) (mediaDeliveryDecision, error) {
+	if strings.TrimSpace(mediaLink) == "" {
+		return mediaDeliveryDecision{}, fmt.Errorf("media link is required")
+	}
+	decision, err := r.resolve(ctx, source, "", mediaLink)
+	if err != nil {
+		return mediaDeliveryDecision{}, err
+	}
+	if !decision.Managed || decision.SourceCID == "" {
+		return mediaDeliveryDecision{}, fmt.Errorf("media link is unavailable")
+	}
+	return decision, nil
+}
+
+func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request, cid, requestedMediaLink string) (mediaDeliveryDecision, error) {
 	if r == nil {
 		return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
 	}
 	endpoint := *r.endpoint
 	query := endpoint.Query()
-	query.Set("search", cid)
+	if cid != "" {
+		query.Set("search", cid)
+	}
 	query.Set("size", "2")
+	if requestedMediaLink != "" {
+		query.Set("media_link", requestedMediaLink)
+	}
 	if source != nil {
-		if mediaLink := strings.TrimSpace(source.URL.Query().Get("media_link")); mediaLink != "" {
+		if mediaLink := strings.TrimSpace(source.URL.Query().Get("media_link")); mediaLink != "" && requestedMediaLink == "" {
 			query.Set("media_link", mediaLink)
 		}
 	}
@@ -107,16 +134,39 @@ func (r *mediaAccessResolver) Resolve(ctx context.Context, source *http.Request,
 		if replacement := mediaPosterReplacement(row["metadata"], cid, mediaDeliveryMode(candidate)); replacement != "" && decision.Mode != mediaDeliveryOriginal {
 			decision.ReplacementCID = replacement
 		}
+		if decision.SourceCID == "" {
+			decision.SourceCID = mediaStorageCID(row["storage_uri"])
+		}
+		if decision.PosterCID == "" {
+			decision.PosterCID = mediaStorageCID(row["poster_uri"])
+		}
 	}
 	if decision.Mode != mediaDeliveryOriginal {
 		for _, row := range payload.Rows {
-			if replacement := mediaPosterReplacement(row["metadata"], cid, decision.Mode); replacement != "" {
+			posterCID := decision.PosterCID
+			if posterCID == "" {
+				posterCID = cid
+			}
+			if replacement := mediaPosterReplacement(row["metadata"], posterCID, decision.Mode); replacement != "" {
 				decision.ReplacementCID = replacement
 				break
 			}
 		}
 	}
 	return decision, nil
+}
+
+func mediaStorageCID(value interface{}) string {
+	uri, ok := responseString(value)
+	if !ok {
+		return ""
+	}
+	for _, prefix := range []string{"ipfs://", "video://"} {
+		if cid := strings.TrimPrefix(uri, prefix); cid != uri {
+			return strings.TrimSpace(cid)
+		}
+	}
+	return ""
 }
 
 func mediaPosterReplacement(value interface{}, originalCID string, mode mediaDeliveryMode) string {
@@ -185,6 +235,13 @@ func (h *Handler) resolveMediaDelivery(r *http.Request, cid string) (mediaDelive
 		return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
 	}
 	return h.mediaAccess.Resolve(r.Context(), r, cid)
+}
+
+func (h *Handler) resolveMediaDeliveryLink(r *http.Request, mediaLink string) (mediaDeliveryDecision, error) {
+	if h.mediaAccess == nil {
+		return mediaDeliveryDecision{}, fmt.Errorf("media access resolver is not configured")
+	}
+	return h.mediaAccess.ResolveLink(r.Context(), r, mediaLink)
 }
 
 func protectedMediaCacheControl(managed bool) string {

@@ -196,21 +196,20 @@ func checkDiskSpace(dir string, requiredBytes int64) error {
 // HandleUpload обрабатывает POST /upload (один файл).
 func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No file uploaded"})
+		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No file uploaded"})
+		writeUploadError(w, r, http.StatusBadRequest, "upload_missing_file", nil)
 		return
 	}
 	defer file.Close()
 
 	// Валидация типа
 	if err := validateFile(header.Filename, header.Header.Get("Content-Type"), h.cfg); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error":        err.Error(),
-			"allowedTypes": h.cfg.Upload.AllowedExtensions,
+		writeUploadError(w, r, http.StatusBadRequest, "unsupported_file_type", map[string]any{
+			"allowed_extensions": h.cfg.Upload.AllowedExtensions,
 		})
 		return
 	}
@@ -218,16 +217,15 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	limitedReader := &countingReader{r: io.LimitReader(file, h.cfg.Upload.MaxFileSize+1)}
 	data, err := io.ReadAll(limitedReader)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Upload failed"})
+		writeUploadError(w, r, http.StatusInternalServerError, "upload_failed", nil)
 		return
 	}
 
 	// Серверная проверка: если прочитано больше MaxFileSize — файл слишком большой.
 	// Это достоверная проверка, основанная на реальных байтах, а не на заголовке.
 	if limitedReader.bytesRead > h.cfg.Upload.MaxFileSize {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
-			"error":   "File too large",
-			"maxSize": h.cfg.Upload.MaxFileSize,
+		writeUploadError(w, r, http.StatusRequestEntityTooLarge, "file_too_large", map[string]any{
+			"max_bytes": h.cfg.Upload.MaxFileSize,
 		})
 		return
 	}
@@ -236,7 +234,7 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	contentType := http.DetectContentType(data)
 	manifest, err := h.buildFileBundle(ctx, header.Filename, data, contentType)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Upload failed"})
+		writeUploadError(w, r, http.StatusInternalServerError, "upload_failed", nil)
 		return
 	}
 
@@ -247,12 +245,12 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 // HandleUploadMultiple обрабатывает POST /upload-multiple.
 func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No files uploaded"})
+		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
 		return
 	}
 	files := r.MultipartForm.File["files"]
 	if len(files) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No files uploaded"})
+		writeUploadError(w, r, http.StatusBadRequest, "upload_missing_file", nil)
 		return
 	}
 
@@ -264,12 +262,10 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(invalid) > 0 {
-		resp := map[string]interface{}{
-			"error":        "Invalid file types",
-			"allowedTypes": h.cfg.Upload.AllowedExtensions,
-			"invalidFiles": invalid,
-		}
-		writeJSON(w, http.StatusBadRequest, resp)
+		writeUploadError(w, r, http.StatusBadRequest, "unsupported_file_type", map[string]any{
+			"allowed_extensions": h.cfg.Upload.AllowedExtensions,
+			"invalid_files":      invalid,
+		})
 		return
 	}
 
@@ -278,7 +274,11 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	results := make([]Response, len(files))
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	errorsList := make([]string, 0)
+	type uploadFailure struct {
+		code     string
+		filename string
+	}
+	failures := make([]uploadFailure, 0)
 
 	for i, fh := range files {
 		wg.Add(1)
@@ -287,7 +287,7 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			f, err := fileHeader.Open()
 			if err != nil {
 				mu.Lock()
-				errorsList = append(errorsList, fmt.Sprintf("%s: open failed", fileHeader.Filename))
+				failures = append(failures, uploadFailure{code: "upload_failed", filename: fileHeader.Filename})
 				mu.Unlock()
 				return
 			}
@@ -297,14 +297,14 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			data, err := io.ReadAll(limitedReader)
 			if err != nil {
 				mu.Lock()
-				errorsList = append(errorsList, fmt.Sprintf("%s: upload failed", fileHeader.Filename))
+				failures = append(failures, uploadFailure{code: "upload_failed", filename: fileHeader.Filename})
 				mu.Unlock()
 				return
 			}
 
 			if limitedReader.bytesRead > h.cfg.Upload.MaxFileSize {
 				mu.Lock()
-				errorsList = append(errorsList, fmt.Sprintf("%s: file too large", fileHeader.Filename))
+				failures = append(failures, uploadFailure{code: "file_too_large", filename: fileHeader.Filename})
 				mu.Unlock()
 				return
 			}
@@ -313,7 +313,7 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			manifest, err := h.buildFileBundle(ctx, fileHeader.Filename, data, contentType)
 			if err != nil {
 				mu.Lock()
-				errorsList = append(errorsList, fmt.Sprintf("%s: upload failed", fileHeader.Filename))
+				failures = append(failures, uploadFailure{code: "upload_failed", filename: fileHeader.Filename})
 				mu.Unlock()
 				return
 			}
@@ -326,11 +326,22 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
-	if len(errorsList) > 0 {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"error":   "Some uploads failed",
-			"details": errorsList,
-		})
+	if len(failures) > 0 {
+		code := "upload_failed"
+		status := http.StatusInternalServerError
+		failedFiles := make([]string, 0, len(failures))
+		for _, failure := range failures {
+			failedFiles = append(failedFiles, failure.filename)
+			if failure.code == "file_too_large" {
+				code = failure.code
+				status = http.StatusRequestEntityTooLarge
+			}
+		}
+		details := map[string]any{"failed_files": failedFiles}
+		if code == "file_too_large" {
+			details["max_bytes"] = h.cfg.Upload.MaxFileSize
+		}
+		writeUploadError(w, r, status, code, details)
 		return
 	}
 
@@ -351,7 +362,8 @@ func (h *Handler) readManifest(ctx context.Context, cid string) (bundle.Manifest
 	return manifest, nil
 }
 
-// HandleFile обрабатывает GET /file/{cid}, /file/{cid}/bundle и /file/{cid}/{size}.
+// HandleFile serves legacy CID-addressed file URLs. New browser-facing callers
+// use HandleFileLink so a protected asset CID never reaches the DOM.
 func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/file/"), "/")
 	parts := strings.Split(path, "/")
@@ -374,12 +386,40 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
 	decision, err := h.resolveMediaDelivery(r, cid)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
 		return
 	}
+	h.serveFile(w, r, cid, parts[1:], decision)
+}
+
+// HandleFileLink serves GET /file/link/{media_link}/{size}. The link ID is
+// opaque to the browser; file storage resolves its asset and policy internally.
+func (h *Handler) HandleFileLink(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/file/link/"), "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Media link required"})
+		return
+	}
+	decision, err := h.resolveMediaDeliveryLink(r, parts[0])
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		return
+	}
+	if err := validateCID(decision.SourceCID); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
+		return
+	}
+	if h.unpinStore.Has(decision.SourceCID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found", "message": "File was deleted"})
+		return
+	}
+	h.serveFile(w, r, decision.SourceCID, parts[1:], decision)
+}
+
+func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, parts []string, decision mediaDeliveryDecision) {
+	ctx := r.Context()
 
 	manifest, err := h.readManifest(ctx, cid)
 	if err != nil {
@@ -387,7 +427,7 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(parts) == 2 && parts[1] == "bundle" {
+	if len(parts) == 1 && parts[0] == "bundle" {
 		if decision.Managed && decision.Mode != mediaDeliveryOriginal {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected media bundle is unavailable"})
 			return
@@ -400,8 +440,8 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 	bundlePath := manifest.Original.BundlePath
 	contentType := manifest.Original.ContentType
 	variantKey := ""
-	if len(parts) == 2 && parts[1] != "" {
-		variantKey = parts[1]
+	if len(parts) == 1 && parts[0] != "" {
+		variantKey = parts[0]
 	}
 	if decision.Managed && decision.Mode != mediaDeliveryOriginal {
 		variantKey = string(decision.Mode)
@@ -414,7 +454,7 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 		}
 		bundlePath = variant.BundlePath
 		contentType = variant.ContentType
-	} else if len(parts) > 2 {
+	} else if len(parts) > 1 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}

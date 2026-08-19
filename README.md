@@ -307,7 +307,7 @@ docker compose up --build -d
 | `CLUSTER_NODES` | `http://ipfs1:5001,http://ipfs2:5001` | Адреса всех нод кластера через запятую |
 | `API_KEYS` | empty | Опциональные статические API-ключи через запятую |
 | `UPLOAD_MAX_FILE_SIZE` | `10485760` (10 МБ) | Максимальный размер файла |
-| `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,pdf,doc,docx,zip,json,html,txt,mp4,mov,webm,avi` | Разрешённые расширения |
+| `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,jpeg,webp,pdf,doc,docx,zip,json,html,txt,mp4,mov,webm,avi,mkv` | Разрешённые расширения |
 | `PINNING_RETRIES` | `3` | Попыток пиннинга при репликации |
 | `PINNING_RETRY_DELAY_MS` | `1000` | Задержка между попытками (мс) |
 | `UNPIN_TTL` | `24h` | Время до физического удаления после soft-delete |
@@ -350,7 +350,7 @@ docker compose up --build -d
 |---|---|---|
 | `VIDEO_MAX_DURATION_SEC` | `60` | Максимальная длительность видео (секунд) |
 | `VIDEO_MAX_SIZE_MB` | `30` | Максимальный размер видеофайла (МБ) |
-| `VIDEO_ASPECT_RATIO_TOLERANCE` | `0.1` | Допуск пропорций от 9:16 (0.1 = ±10%) |
+| `VIDEO_ASPECT_RATIO_TOLERANCE` | `0.1` | Допуск пропорций от 9:16 (0.1 = ±10%); при проверке учитывается `rotate`/Display Matrix из видео телефона |
 | `VIDEO_SEGMENT_DURATION_SEC` | `4` | Длительность HLS-сегмента (секунд) |
 | `VIDEO_BITRATES` | `500k,1500k,4000k` | Битрейты для low/medium/high вариантов |
 | `FFMPEG_PATH` | `ffmpeg` | Путь к бинарнику ffmpeg |
@@ -378,7 +378,7 @@ docker compose up --build -d
 GET /config
 ```
 
-Возвращает публичные возможности сервиса. Секция `image` описывает доступные размеры, privacy-варианты и шаблоны URL.
+Возвращает публичные возможности сервиса. Секция `image` описывает доступные размеры, privacy-варианты и шаблоны URL. Секция `upload.media` — источник клиентских ограничений для изображений и видео: accept-строка, лимит в байтах, готовая локализованная подпись и требования к видео. Запрос можно локализовать через `?lang=ru` или заголовок `Accept-Language`.
 
 ```json
 {
@@ -394,9 +394,42 @@ GET /config
     "resize_policy": "smart-cover",
     "url_template": "/file/{cid}/{size}",
     "bundle_template": "/file/{cid}/bundle"
+  },
+  "upload": {
+    "media": {
+      "image": {
+        "accept": "image/jpeg,image/png,image/webp",
+        "max_bytes": 10485760,
+        "max_size_label": "10 МБ",
+        "description": "JPEG, PNG, WebP до 10 МБ",
+        "too_large_message": "Размер файла превышает допустимые 10 МБ."
+      },
+      "video": {
+        "accept": "video/mp4,video/quicktime,...",
+        "max_bytes": 31457280,
+        "max_size_label": "30 МБ",
+        "max_duration_sec": 60,
+        "expected_aspect_ratio": "9:16",
+        "description": "MP4, MOV, WebM, AVI, MKV до 30 МБ, до 60 сек., вертикальное 9:16"
+      }
+    }
   }
 }
 ```
+
+### Ошибки загрузки
+
+`POST /upload`, `POST /upload-multiple` и `POST /upload-video` возвращают единый JSON-контракт ошибки:
+
+```json
+{
+  "code": "video_aspect_ratio_invalid",
+  "message": "Можно загрузить только вертикальное видео 9:16.",
+  "details": {"expected_aspect_ratio": "9:16"}
+}
+```
+
+`message` уже локализован и подходит для прямого вывода пользователю; `code` и `details` предназначены для программной обработки. Возможные коды: `upload_missing_file`, `unsupported_file_type`, `unsupported_video_format`, `file_too_large`, `video_file_too_large`, `video_duration_exceeded`, `video_aspect_ratio_invalid`, `video_metadata_invalid`, `upload_form_invalid`, `upload_storage_unavailable`, `upload_failed`.
 
 ### Загрузка файла
 

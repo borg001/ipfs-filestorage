@@ -80,6 +80,13 @@ func TestHandleUpload_CountingReader_TooLarge(t *testing.T) {
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("Status = %d, want 413 for oversized file, body: %s", w.Code, w.Body.String())
 	}
+	var response uploadErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "file_too_large" || response.Details["max_bytes"] != float64(maxSize) {
+		t.Fatalf("Unexpected upload limit response: %+v", response)
+	}
 }
 
 func TestHandleUpload_FakeHeaderSize(t *testing.T) {
@@ -110,6 +117,50 @@ func TestHandleUpload_FakeHeaderSize(t *testing.T) {
 	// Сервер использует countingReader → 413
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("Status = %d, want 413 — server must verify actual bytes, not header", w.Code)
+	}
+}
+
+func TestHandleUploadMultiple_LocalizesValidationFailure(t *testing.T) {
+	cfg := &config.Config{
+		Upload: config.UploadConfig{
+			MaxFileSize:       1024,
+			AllowedExtensions: []string{"txt"},
+			AllowedMimeTypes:  map[string]bool{"text/plain; charset=utf-8": true},
+		},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
+	}
+	h := setupTestHandler(cfg)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("files", "unsupported.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("not an executable")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/upload-multiple?lang=ru", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	h.HandleUploadMultiple(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	var response uploadErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "unsupported_file_type" || response.Message != "Этот формат файла не поддерживается." {
+		t.Fatalf("unexpected localized batch error: %+v", response)
+	}
+	if got, ok := response.Details["invalid_files"].([]interface{}); !ok || len(got) != 1 || got[0] != "unsupported.exe" {
+		t.Fatalf("invalid files detail = %#v, want unsupported.exe", response.Details["invalid_files"])
 	}
 }
 

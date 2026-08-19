@@ -2,6 +2,7 @@ package video
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
@@ -25,8 +26,9 @@ func TestValidateFileSizeTooLarge(t *testing.T) {
 	v := &Validator{cfg: cfg, prober: &mockProber{}}
 
 	err := v.Validate(context.Background(), "/some/file.mp4", 20*1024*1024)
-	if err == nil {
-		t.Error("Expected error for file too large")
+	var validationError *ValidationError
+	if !errors.As(err, &validationError) || validationError.Code != "video_file_too_large" || validationError.MaxSizeBytes != 10*1024*1024 {
+		t.Fatalf("Expected typed file-size validation error, got %v", err)
 	}
 }
 
@@ -57,8 +59,9 @@ func TestValidateDurationTooLong(t *testing.T) {
 	}}
 
 	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
-	if err == nil {
-		t.Error("Expected error for video too long")
+	var validationError *ValidationError
+	if !errors.As(err, &validationError) || validationError.Code != "video_duration_exceeded" || validationError.MaxDurationSec != 30 {
+		t.Fatalf("Expected typed duration validation error, got %v", err)
 	}
 }
 
@@ -89,8 +92,9 @@ func TestValidateWrongAspectRatio(t *testing.T) {
 	}}
 
 	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
-	if err == nil {
-		t.Error("Expected error for horizontal aspect ratio")
+	var validationError *ValidationError
+	if !errors.As(err, &validationError) || validationError.Code != "video_aspect_ratio_invalid" || validationError.ExpectedAspectRatio != "9:16" {
+		t.Fatalf("Expected typed aspect ratio validation error, got %v", err)
 	}
 }
 
@@ -107,6 +111,40 @@ func TestValidateCorrectVertical9x16(t *testing.T) {
 	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
 	if err != nil {
 		t.Errorf("Expected no error for valid video, got: %v", err)
+	}
+}
+
+func TestValidateAcceptsPhoneVideoWithVerticalDisplayRotation(t *testing.T) {
+	cfg := &config.VideoConfig{
+		MaxSizeBytes:         100 * 1024 * 1024,
+		MaxDurationSec:       60,
+		AspectRatioTolerance: 0.1,
+	}
+	v := &Validator{cfg: cfg, prober: &mockProber{
+		// A phone can store landscape pixels and use a 90 degree display
+		// matrix. The rendered result is 1080x1920, not 1920x1080.
+		info: &VideoInfo{Duration: 10, Width: 1920, Height: 1080, Rotation: 90},
+	}}
+
+	if err := v.Validate(context.Background(), "/some/phone-video.mp4", 1024); err != nil {
+		t.Fatalf("Expected rotated vertical phone video to be accepted, got: %v", err)
+	}
+}
+
+func TestValidateRejectsRotatedLandscapeVideo(t *testing.T) {
+	cfg := &config.VideoConfig{
+		MaxSizeBytes:         100 * 1024 * 1024,
+		MaxDurationSec:       60,
+		AspectRatioTolerance: 0.1,
+	}
+	v := &Validator{cfg: cfg, prober: &mockProber{
+		info: &VideoInfo{Duration: 10, Width: 1080, Height: 1920, Rotation: 90},
+	}}
+
+	err := v.Validate(context.Background(), "/some/rotated-landscape-video.mp4", 1024)
+	var validationError *ValidationError
+	if !errors.As(err, &validationError) || validationError.Code != "video_aspect_ratio_invalid" {
+		t.Fatalf("Expected rotated landscape video to be rejected, got %v", err)
 	}
 }
 
