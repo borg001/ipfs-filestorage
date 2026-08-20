@@ -175,6 +175,38 @@ func TestBuildHLSArgsBitrateParams(t *testing.T) {
 	}
 }
 
+func TestBuildHLSArgsUsesFrameBasedGOP(t *testing.T) {
+	cfg := &config.VideoConfig{
+		SegmentDurationSec: 4,
+		Bitrates:           []string{"500k"},
+	}
+	tr := NewTranscoder(cfg)
+	args := tr.buildHLSArgsForVariants("/tmp/input.mp4", "/tmp/output", []hlsVariant{{Name: "low", Bitrate: "500k"}}, 30)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-g 120") || !strings.Contains(joined, "-keyint_min 120") {
+		t.Fatalf("GOP must use frames for a four-second 30fps segment: %s", joined)
+	}
+	if !strings.Contains(joined, "-force_key_frames expr:gte(t,n_forced*4)") {
+		t.Fatalf("HLS segments must force a keyframe at the segment boundary: %s", joined)
+	}
+}
+
+func TestSelectVariantsAvoidsLowBitrateUpscaling(t *testing.T) {
+	tr := NewTranscoder(&config.VideoConfig{Bitrates: []string{"500k", "1500k", "4000k"}})
+	variants := tr.selectVariants(&VideoInfo{BitRate: 512000})
+	if len(variants) != 1 || variants[0] != (hlsVariant{Name: "low", Bitrate: "500k"}) {
+		t.Fatalf("low bitrate input must retain only the low rendition, got %#v", variants)
+	}
+}
+
+func TestSelectVariantsRetainsApplicableLadder(t *testing.T) {
+	tr := NewTranscoder(&config.VideoConfig{Bitrates: []string{"500k", "1500k", "4000k"}})
+	variants := tr.selectVariants(&VideoInfo{BitRate: 5_000_000})
+	if len(variants) != 3 {
+		t.Fatalf("high bitrate input must retain the configured ladder, got %#v", variants)
+	}
+}
+
 func TestBuildHLSArgsSegmentFilenames(t *testing.T) {
 	cfg := &config.VideoConfig{
 		SegmentDurationSec: 4,

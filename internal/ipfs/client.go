@@ -49,7 +49,10 @@ func New(url string) (*Client, error) {
 // Add загружает файл в IPFS и возвращает CID
 func (c *Client) Add(ctx context.Context, filename string, r io.Reader) (*AddResult, error) {
 	f := files.NewReaderFile(r)
-	resolved, err := c.api.Unixfs().Add(ctx, f, options.Unixfs.Pin(false))
+	// A cluster add writes directly to every configured node. Pin the content at
+	// the same time so callers do not have to fetch and pin every HLS segment in
+	// a second pass.
+	resolved, err := c.api.Unixfs().Add(ctx, f, options.Unixfs.Pin(true))
 	if err != nil {
 		return nil, fmt.Errorf("ipfs add failed: %w", err)
 	}
@@ -66,7 +69,7 @@ func (c *Client) AddDir(ctx context.Context, entries map[string][]byte) (*AddRes
 		nodes[name] = files.NewBytesFile(data)
 	}
 	dir := files.NewMapDirectory(nodes)
-	resolved, err := c.api.Unixfs().Add(ctx, dir, options.Unixfs.Pin(false))
+	resolved, err := c.api.Unixfs().Add(ctx, dir, options.Unixfs.Pin(true))
 	if err != nil {
 		return nil, fmt.Errorf("ipfs add dir failed: %w", err)
 	}

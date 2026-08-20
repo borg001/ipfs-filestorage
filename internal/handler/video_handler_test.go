@@ -25,6 +25,7 @@ var (
 	testSegmentCID  = testCID("Segment")
 	testPlaylistCID = testCID("Playlist")
 	testPosterCID   = testCID("Poster")
+	testInitCID     = testCID("Init")
 )
 
 func testCID(seed string) string {
@@ -113,6 +114,119 @@ func TestHandleStreamMasterPropagatesQueryToken(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "../segment/"+testLowCID+".m3u8?token=abc") {
 		t.Error("master playlist should propagate query token")
+	}
+}
+
+func TestHandleStreamLinkRewritesEveryHLSReferenceWithoutCIDs(t *testing.T) {
+	cfg := &config.Config{Video: config.VideoConfig{TempDir: t.TempDir()}}
+	h := setupVideoTestHandler(t, cfg)
+	cluster := h.cluster.(*mockCluster)
+
+	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("media_link"); got != "77" {
+			t.Fatalf("media_link = %q, want 77", got)
+		}
+		if got := r.URL.Query().Get("search"); got != "" {
+			t.Fatalf("opaque route sent CID in search=%q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer viewer-token" {
+			t.Fatalf("Authorization = %q, want forwarded token", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{{
+			"delivery_mode": "original",
+			"storage_uri":   "video://" + testMasterCID,
+			"poster_uri":    "ipfs://" + testPosterCID,
+		}}})
+	}))
+	defer policy.Close()
+	h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
+
+	cluster.files[testMasterCID] = []byte("#EXTM3U\n#EXT-X-IAMFREE-POSTER:SIZE=360x640,URI=\"../segment/" + testPosterCID + ".jpg\"\n#EXT-X-STREAM-INF:BANDWIDTH=500000\n../segment/" + testLowCID + ".m3u8\n")
+	cluster.files[testLowCID] = []byte("#EXTM3U\n#EXT-X-MAP:URI=\"../segment/" + testInitCID + ".mp4\"\n#EXTINF:4,\n../segment/" + testSegmentCID + ".m4s\n")
+	cluster.files[testInitCID] = []byte("init")
+	cluster.files[testSegmentCID] = []byte("segment")
+
+	masterRequest := httptest.NewRequest(http.MethodGet, "/stream/link/77/master.m3u8?token=viewer-token", nil)
+	masterResponse := httptest.NewRecorder()
+	h.HandleStreamLink(masterResponse, masterRequest)
+	if masterResponse.Code != http.StatusOK {
+		t.Fatalf("master status = %d, want 200: %s", masterResponse.Code, masterResponse.Body.String())
+	}
+	master := masterResponse.Body.String()
+	if !strings.Contains(master, "playlist/0.m3u8?token=viewer-token") || !strings.Contains(master, "URI=\"poster.jpg?token=viewer-token\"") {
+		t.Fatalf("opaque master was not rewritten: %s", master)
+	}
+	for _, cid := range []string{testMasterCID, testPosterCID, testLowCID, testInitCID, testSegmentCID} {
+		if strings.Contains(master, cid) {
+			t.Fatalf("master exposes CID %q: %s", cid, master)
+		}
+	}
+
+	playlistRequest := httptest.NewRequest(http.MethodGet, "/stream/link/77/playlist/0.m3u8?token=viewer-token", nil)
+	playlistResponse := httptest.NewRecorder()
+	h.HandleStreamLink(playlistResponse, playlistRequest)
+	if playlistResponse.Code != http.StatusOK {
+		t.Fatalf("playlist status = %d, want 200: %s", playlistResponse.Code, playlistResponse.Body.String())
+	}
+	playlist := playlistResponse.Body.String()
+	if !strings.Contains(playlist, "URI=\"../segment/0/0.mp4?token=viewer-token\"") || !strings.Contains(playlist, "../segment/0/1.m4s?token=viewer-token") {
+		t.Fatalf("opaque variant was not rewritten: %s", playlist)
+	}
+	for _, cid := range []string{testMasterCID, testPosterCID, testLowCID, testInitCID, testSegmentCID} {
+		if strings.Contains(playlist, cid) {
+			t.Fatalf("variant exposes CID %q: %s", cid, playlist)
+		}
+	}
+
+	segmentRequest := httptest.NewRequest(http.MethodGet, "/stream/link/77/segment/0/1.m4s?token=viewer-token", nil)
+	segmentResponse := httptest.NewRecorder()
+	h.HandleStreamLink(segmentResponse, segmentRequest)
+	if segmentResponse.Code != http.StatusOK || segmentResponse.Body.String() != "segment" {
+		t.Fatalf("opaque segment = status %d, body %q", segmentResponse.Code, segmentResponse.Body.String())
+	}
+}
+
+func TestHandleStreamLinkServesBlurredPosterForPrivateVideo(t *testing.T) {
+	cfg := &config.Config{Video: config.VideoConfig{TempDir: t.TempDir()}}
+	h := setupVideoTestHandler(t, cfg)
+	cluster := h.cluster.(*mockCluster)
+	blurredPosterCID := testCID("OpaqueBlurPoster")
+	cluster.files[testPosterCID] = []byte("original-poster")
+	cluster.files[blurredPosterCID] = []byte("blurred-poster")
+
+	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("media_link"); got != "77" {
+			t.Fatalf("media_link = %q, want 77", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{{
+			"delivery_mode": "blur",
+			"storage_uri":   "video://" + testMasterCID,
+			"poster_uri":    "ipfs://" + testPosterCID,
+			"metadata": map[string]interface{}{
+				"poster_aliases": map[string]interface{}{
+					testPosterCID: map[string]interface{}{"blur": blurredPosterCID},
+				},
+			},
+		}}})
+	}))
+	defer policy.Close()
+	h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
+
+	posterRequest := httptest.NewRequest(http.MethodGet, "/stream/link/77/poster.jpg?token=viewer-token", nil)
+	posterResponse := httptest.NewRecorder()
+	h.HandleStreamLink(posterResponse, posterRequest)
+	if posterResponse.Code != http.StatusOK || posterResponse.Body.String() != "blurred-poster" {
+		t.Fatalf("private opaque poster = status %d, body %q", posterResponse.Code, posterResponse.Body.String())
+	}
+	if got := posterResponse.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("poster Cache-Control = %q, want private no-store", got)
+	}
+
+	masterRequest := httptest.NewRequest(http.MethodGet, "/stream/link/77/master.m3u8?token=viewer-token", nil)
+	masterResponse := httptest.NewRecorder()
+	h.HandleStreamLink(masterResponse, masterRequest)
+	if masterResponse.Code != http.StatusForbidden {
+		t.Fatalf("private opaque master = %d, want 403", masterResponse.Code)
 	}
 }
 
@@ -385,10 +499,10 @@ func TestHandleUploadVideoNotVideoExt(t *testing.T) {
 		t.Errorf("Status = %d, want 400 for non-video file", w.Code)
 	}
 
-	var resp map[string]string
+	var resp uploadErrorResponse
 	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["error"] != "Not a video file" {
-		t.Errorf("Error = %q, want 'Not a video file'", resp["error"])
+	if resp.Code != "unsupported_video_format" {
+		t.Errorf("Code = %q, want unsupported_video_format", resp.Code)
 	}
 }
 
@@ -420,10 +534,25 @@ func TestHandleUploadVideoTooLarge(t *testing.T) {
 		t.Errorf("Status = %d, want 413 for file too large", w.Code)
 	}
 
-	var resp map[string]string
+	var resp uploadErrorResponse
 	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["error"] == "" {
-		t.Error("Expected error message for oversized file")
+	if resp.Code != "video_file_too_large" || resp.Message == "" {
+		t.Fatalf("Expected structured oversized video error, got %+v", resp)
+	}
+}
+
+func TestHandleUploadVideo_LocalizesAspectRatioFailure(t *testing.T) {
+	response := uploadErrorResponse{}
+	// The direct handler response is covered here because ffprobe is deliberately
+	// mocked in validator tests; HTTP presentation must remain localized.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/upload-video?lang=ru", nil)
+	writeUploadError(w, req, http.StatusBadRequest, "video_aspect_ratio_invalid", map[string]any{"expected_aspect_ratio": "9:16"})
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "video_aspect_ratio_invalid" || response.Message != "Можно загрузить только вертикальное видео 9:16." {
+		t.Fatalf("Unexpected localized aspect error: %+v", response)
 	}
 }
 

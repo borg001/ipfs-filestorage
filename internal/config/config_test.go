@@ -38,11 +38,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Unpin.TTL != 24*time.Hour {
 		t.Errorf("Default Unpin.TTL = %v, want 24h", cfg.Unpin.TTL)
 	}
-	if cfg.Video.MaxDurationSec != 60 {
-		t.Errorf("Default Video.MaxDurationSec = %d, want 60", cfg.Video.MaxDurationSec)
+	if cfg.Video.MaxDurationSec != 2400 {
+		t.Errorf("Default Video.MaxDurationSec = %d, want 2400", cfg.Video.MaxDurationSec)
 	}
-	if cfg.Video.MaxSizeBytes != 30*1024*1024 {
-		t.Errorf("Default Video.MaxSizeBytes = %d, want 30MB", cfg.Video.MaxSizeBytes)
+	if cfg.Video.MaxSizeBytes != 1024*1024*1024 {
+		t.Errorf("Default Video.MaxSizeBytes = %d, want 1024MB", cfg.Video.MaxSizeBytes)
 	}
 	if cfg.Video.AspectRatioTolerance != 0.1 {
 		t.Errorf("Default Video.AspectRatioTolerance = %f, want 0.1", cfg.Video.AspectRatioTolerance)

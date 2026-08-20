@@ -82,7 +82,7 @@ POST /upload → storage1 → ClusterAdd(payload)
 
 ```
 POST /upload-video (video.mp4)
-  ├→ validate: ffprobe — размер, длительность ≤60с, пропорции 9:16
+  ├→ validate: ffprobe — размер, длительность ≤40 мин. (2400 с), пропорции 9:16
   ├→ transcode: ffmpeg — poster JPEG + 3 варианта (low/medium/high), fMP4 CMAF
   ├→ privacy posters: blur + blur_faces локальным face detector
   ├→ upload: каждый чанк → IPFS → CID
@@ -227,6 +227,26 @@ NGINX_PORT=8081
 
 Подождите ~60 секунд — IPFS-нодам нужно время на инициализацию, healthcheck и подключение к bootstrap.
 
+### Внешний reverse proxy
+
+Если перед встроенным nginx находится ещё один nginx, для пути, который проксирует
+`/upload-video`, он должен принимать 1 ГБ и ждать до 40 минут. Иначе внешний
+proxy вернёт `413`, `502` или `504` раньше file-storage.
+
+```nginx
+client_max_body_size 1g;
+
+location /storage/ {
+    proxy_request_buffering off;
+    proxy_send_timeout 2400s;
+    proxy_read_timeout 2400s;
+}
+```
+
+Если `upload-video` вынесен в отдельный `location`, параметры времени должны
+быть заданы в нём. Встроенный конфиг кластера уже содержит эти значения для
+`/upload-video`.
+
 ### Проверка работоспособности
 
 ```bash
@@ -255,7 +275,7 @@ curl -s "http://localhost:8081/file/QmXyZ...?token=SECRET_KEY_1" -o file.bin
 ### Загрузка видео
 
 ```bash
-# Загрузить вертикальное видео (9:16, до 30 МБ, до 60 сек)
+# Загрузить вертикальное видео (9:16, до 1 ГБ, до 40 мин.)
 curl -s -X POST http://localhost:8081/upload-video \
   -H "X-API-Key: SECRET_KEY_1" \
   -F "file=@clip.mp4" | jq .
@@ -307,7 +327,7 @@ docker compose up --build -d
 | `CLUSTER_NODES` | `http://ipfs1:5001,http://ipfs2:5001` | Адреса всех нод кластера через запятую |
 | `API_KEYS` | empty | Опциональные статические API-ключи через запятую |
 | `UPLOAD_MAX_FILE_SIZE` | `10485760` (10 МБ) | Максимальный размер файла |
-| `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,pdf,doc,docx,zip,json,html,txt,mp4,mov,webm,avi` | Разрешённые расширения |
+| `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,jpeg,webp,pdf,doc,docx,zip,json,html,txt,mp4,mov,webm,avi,mkv` | Разрешённые расширения |
 | `PINNING_RETRIES` | `3` | Попыток пиннинга при репликации |
 | `PINNING_RETRY_DELAY_MS` | `1000` | Задержка между попытками (мс) |
 | `UNPIN_TTL` | `24h` | Время до физического удаления после soft-delete |
@@ -348,9 +368,9 @@ docker compose up --build -d
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `VIDEO_MAX_DURATION_SEC` | `60` | Максимальная длительность видео (секунд) |
-| `VIDEO_MAX_SIZE_MB` | `30` | Максимальный размер видеофайла (МБ) |
-| `VIDEO_ASPECT_RATIO_TOLERANCE` | `0.1` | Допуск пропорций от 9:16 (0.1 = ±10%) |
+| `VIDEO_MAX_DURATION_SEC` | `2400` | Максимальная длительность видео (секунд) |
+| `VIDEO_MAX_SIZE_MB` | `1024` | Максимальный размер видеофайла (МБ) |
+| `VIDEO_ASPECT_RATIO_TOLERANCE` | `0.1` | Допуск пропорций от 9:16 (0.1 = ±10%); при проверке учитывается `rotate`/Display Matrix из видео телефона |
 | `VIDEO_SEGMENT_DURATION_SEC` | `4` | Длительность HLS-сегмента (секунд) |
 | `VIDEO_BITRATES` | `500k,1500k,4000k` | Битрейты для low/medium/high вариантов |
 | `FFMPEG_PATH` | `ffmpeg` | Путь к бинарнику ffmpeg |
@@ -378,7 +398,7 @@ docker compose up --build -d
 GET /config
 ```
 
-Возвращает публичные возможности сервиса. Секция `image` описывает доступные размеры, privacy-варианты и шаблоны URL.
+Возвращает публичные возможности сервиса. Секция `image` описывает доступные размеры, privacy-варианты и шаблоны URL. Секция `upload.media` — источник клиентских ограничений для изображений и видео: accept-строка, лимит в байтах, готовая локализованная подпись и требования к видео. Запрос можно локализовать через `?lang=ru` или заголовок `Accept-Language`.
 
 ```json
 {
@@ -394,9 +414,42 @@ GET /config
     "resize_policy": "smart-cover",
     "url_template": "/file/{cid}/{size}",
     "bundle_template": "/file/{cid}/bundle"
+  },
+  "upload": {
+    "media": {
+      "image": {
+        "accept": "image/jpeg,image/png,image/webp",
+        "max_bytes": 10485760,
+        "max_size_label": "10 МБ",
+        "description": "JPEG, PNG, WebP до 10 МБ",
+        "too_large_message": "Размер файла превышает допустимые 10 МБ."
+      },
+      "video": {
+        "accept": "video/mp4,video/quicktime,...",
+        "max_bytes": 1073741824,
+        "max_size_label": "1 ГБ",
+        "max_duration_sec": 2400,
+        "expected_aspect_ratio": "9:16",
+        "description": "MP4, MOV, WebM, AVI, MKV до 1 ГБ, до 40 мин., вертикальное 9:16"
+      }
+    }
   }
 }
 ```
+
+### Ошибки загрузки
+
+`POST /upload`, `POST /upload-multiple` и `POST /upload-video` возвращают единый JSON-контракт ошибки:
+
+```json
+{
+  "code": "video_aspect_ratio_invalid",
+  "message": "Можно загрузить только вертикальное видео 9:16.",
+  "details": {"expected_aspect_ratio": "9:16"}
+}
+```
+
+`message` уже локализован и подходит для прямого вывода пользователю; `code` и `details` предназначены для программной обработки. Возможные коды: `upload_missing_file`, `unsupported_file_type`, `unsupported_video_format`, `file_too_large`, `video_file_too_large`, `video_duration_exceeded`, `video_aspect_ratio_invalid`, `video_metadata_invalid`, `upload_form_invalid`, `upload_storage_unavailable`, `upload_failed`.
 
 ### Загрузка файла
 
@@ -483,7 +536,7 @@ Authorization: Bearer SECRET_KEY_1
 
 Поле формы: `file` (mp4, webm, mov, avi, mkv, m4v)
 
-Ограничения: вертикальное видео (9:16 ±10%), до 30 МБ, до 60 сек.
+Ограничения: вертикальное видео (9:16 ±10%), до 1 ГБ, до 40 мин.
 
 Ответ:
 ```json
