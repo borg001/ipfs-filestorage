@@ -82,7 +82,7 @@ POST /upload → storage1 → ClusterAdd(payload)
 
 ```
 POST /upload-video (video.mp4)
-  ├→ validate: ffprobe — размер, длительность ≤60с, пропорции 9:16
+  ├→ validate: ffprobe — размер, длительность ≤40 мин. (2400 с), пропорции 9:16
   ├→ transcode: ffmpeg — poster JPEG + 3 варианта (low/medium/high), fMP4 CMAF
   ├→ privacy posters: blur + blur_faces локальным face detector
   ├→ upload: каждый чанк → IPFS → CID
@@ -227,6 +227,26 @@ NGINX_PORT=8081
 
 Подождите ~60 секунд — IPFS-нодам нужно время на инициализацию, healthcheck и подключение к bootstrap.
 
+### Внешний reverse proxy
+
+Если перед встроенным nginx находится ещё один nginx, для пути, который проксирует
+`/upload-video`, он должен принимать 1 ГБ и ждать до 40 минут. Иначе внешний
+proxy вернёт `413`, `502` или `504` раньше file-storage.
+
+```nginx
+client_max_body_size 1g;
+
+location /storage/ {
+    proxy_request_buffering off;
+    proxy_send_timeout 2400s;
+    proxy_read_timeout 2400s;
+}
+```
+
+Если `upload-video` вынесен в отдельный `location`, параметры времени должны
+быть заданы в нём. Встроенный конфиг кластера уже содержит эти значения для
+`/upload-video`.
+
 ### Проверка работоспособности
 
 ```bash
@@ -255,7 +275,7 @@ curl -s "http://localhost:8081/file/QmXyZ...?token=SECRET_KEY_1" -o file.bin
 ### Загрузка видео
 
 ```bash
-# Загрузить вертикальное видео (9:16, до 30 МБ, до 60 сек)
+# Загрузить вертикальное видео (9:16, до 1 ГБ, до 40 мин.)
 curl -s -X POST http://localhost:8081/upload-video \
   -H "X-API-Key: SECRET_KEY_1" \
   -F "file=@clip.mp4" | jq .
@@ -516,7 +536,7 @@ Authorization: Bearer SECRET_KEY_1
 
 Поле формы: `file` (mp4, webm, mov, avi, mkv, m4v)
 
-Ограничения: вертикальное видео (9:16 ±10%), до 30 МБ, до 60 сек.
+Ограничения: вертикальное видео (9:16 ±10%), до 1 ГБ, до 40 мин.
 
 Ответ:
 ```json
