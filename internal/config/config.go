@@ -269,8 +269,8 @@ func Load() *Config {
 			}),
 		},
 		Video: VideoConfig{
-			MaxDurationSec:       getEnvInt("VIDEO_MAX_DURATION_SEC", 60),
-			MaxSizeBytes:         getEnvInt64("VIDEO_MAX_SIZE_MB", 30) * 1024 * 1024,
+			MaxDurationSec:       getEnvInt("VIDEO_MAX_DURATION_SEC", 2400),
+			MaxSizeBytes:         getEnvInt64("VIDEO_MAX_SIZE_MB", 1024) * 1024 * 1024,
 			AspectRatioTolerance: getEnvFloat("VIDEO_ASPECT_RATIO_TOLERANCE", 0.1),
 			SegmentDurationSec:   getEnvInt("VIDEO_SEGMENT_DURATION_SEC", 4),
 			Bitrates:             getEnvSlice("VIDEO_BITRATES", []string{"500k", "1500k", "4000k"}),
