@@ -33,9 +33,8 @@ func NewCluster(nodeURLs []string) *ClusterManager {
 	return m
 }
 
-// ClusterAdd загружает файл на все ноды и возвращает общий CID.
-// Прямая запись не зависит от provider discovery и Bitswap, поэтому новая
-// загрузка доступна для последующего pin на каждой ноде сразу.
+// ClusterAdd directly writes and pins a file on every configured node, then
+// returns the common CID. It does not depend on provider discovery or Bitswap.
 func (cm *ClusterManager) ClusterAdd(ctx context.Context, filename string, data io.Reader) (*AddResult, error) {
 	if len(cm.nodes) == 0 {
 		return nil, fmt.Errorf("no IPFS nodes in cluster")

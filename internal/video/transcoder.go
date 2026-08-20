@@ -3,9 +3,11 @@ package video
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
@@ -26,6 +28,11 @@ type Transcoder struct {
 	cfg *config.VideoConfig
 }
 
+type hlsVariant struct {
+	Name    string
+	Bitrate string
+}
+
 // NewTranscoder создаёт новый Transcoder.
 func NewTranscoder(cfg *config.VideoConfig) *Transcoder {
 	return &Transcoder{cfg: cfg}
@@ -39,11 +46,13 @@ func (t *Transcoder) Transcode(ctx context.Context, inputPath, outputDir string)
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
-	// Получаем длительность через ffprobe
-	duration, err := t.probeDuration(ctx, inputPath)
+	// Validation has already accepted this file. Reuse the same metadata
+	// contract to avoid creating output renditions that exceed its source.
+	info, err := probeVideoInfo(ctx, t.cfg.FFprobePath, inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("probe duration: %w", err)
 	}
+	duration := info.Duration
 
 	if duration > float64(t.cfg.MaxDurationSec) {
 		return nil, fmt.Errorf("video duration %.1fs exceeds max %ds", duration, t.cfg.MaxDurationSec)
@@ -53,10 +62,12 @@ func (t *Transcoder) Transcode(ctx context.Context, inputPath, outputDir string)
 		return nil, fmt.Errorf("generate thumbnails: %w", err)
 	}
 
-	// Строим ffmpeg-аргументы для multi-variant HLS
-	args := t.buildHLSArgs(inputPath, outputDir)
-	for _, br := range t.cfg.Bitrates {
-		variantDir := filepath.Join(outputDir, bitrateToName(br))
+	hlsVariants := t.selectVariants(info)
+	// Generate only useful HLS renditions. A 500 kbps phone clip must not be
+	// expanded into medium and high copies before IPFS upload.
+	args := t.buildHLSArgsForVariants(inputPath, outputDir, hlsVariants, info.FrameRate)
+	for _, variant := range hlsVariants {
+		variantDir := filepath.Join(outputDir, variant.Name)
 		if err := os.MkdirAll(variantDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create variant dir %s: %w", variantDir, err)
 		}
@@ -70,9 +81,8 @@ func (t *Transcoder) Transcode(ctx context.Context, inputPath, outputDir string)
 
 	// Собираем варианты
 	variants := make(map[string]string)
-	for _, br := range t.cfg.Bitrates {
-		name := bitrateToName(br)
-		variants[name] = filepath.Join(outputDir, name)
+	for _, variant := range hlsVariants {
+		variants[variant.Name] = filepath.Join(outputDir, variant.Name)
 	}
 
 	return &TranscodeResult{
@@ -84,29 +94,38 @@ func (t *Transcoder) Transcode(ctx context.Context, inputPath, outputDir string)
 
 // buildHLSArgs формирует аргументы ffmpeg для генерации multi-variant HLS/CMAF.
 func (t *Transcoder) buildHLSArgs(inputPath, outputDir string) []string {
+	return t.buildHLSArgsForVariants(inputPath, outputDir, t.selectVariants(nil), 0)
+}
+
+func (t *Transcoder) buildHLSArgsForVariants(inputPath, outputDir string, variants []hlsVariant, frameRate float64) []string {
 	segDur := fmt.Sprintf("%d", t.cfg.SegmentDurationSec)
+	gop := fmt.Sprintf("%d", t.gopSize(frameRate))
+	forceKeyFrames := fmt.Sprintf("expr:gte(t,n_forced*%d)", t.cfg.SegmentDurationSec)
 
 	args := []string{
 		"-i", inputPath,
 		"-y", // перезаписать
 	}
 
-	// Один -map + codec для каждого битрейта
-	for _, br := range t.cfg.Bitrates {
-		name := bitrateToName(br)
-		variantDir := filepath.Join(outputDir, name)
+	// One video and optional audio map for every selected rendition.
+	for _, variant := range variants {
+		variantDir := filepath.Join(outputDir, variant.Name)
 		// ffmpeg создаст поддиректории сам через -hls_segment_filename
 
 		args = append(args,
 			"-map", "v:0",
+			"-map", "0:a?",
 			"-c:v", "libx264",
-			"-b:v", br,
-			"-maxrate", br,
-			"-bufsize", multiplyBitrate(br, 2),
+			"-b:v", variant.Bitrate,
+			"-maxrate", variant.Bitrate,
+			"-bufsize", multiplyBitrate(variant.Bitrate, 2),
 			"-preset", "fast",
-			"-g", segDur, // keyframe interval = segment duration
-			"-keyint_min", segDur,
+			"-g", gop,
+			"-keyint_min", gop,
 			"-sc_threshold", "0",
+			"-force_key_frames", forceKeyFrames,
+			"-c:a", "aac",
+			"-b:a", "128k",
 
 			// fMP4 контейнер для CMAF
 			"-f", "hls",
@@ -120,6 +139,46 @@ func (t *Transcoder) buildHLSArgs(inputPath, outputDir string) []string {
 	}
 
 	return args
+}
+
+// selectVariants keeps the configured ladder for source videos that can use
+// it. A rendition above the source bitrate only increases processing time and
+// IPFS storage without adding visual detail, so it is omitted. The lowest
+// rendition is retained as the universal fallback.
+func (t *Transcoder) selectVariants(info *VideoInfo) []hlsVariant {
+	variants := make([]hlsVariant, 0, len(t.cfg.Bitrates))
+	seen := make(map[string]struct{}, len(t.cfg.Bitrates))
+	maxBitrate := int64(0)
+	if info != nil && info.BitRate > 0 {
+		maxBitrate = int64(float64(info.BitRate) * 1.2)
+	}
+	for _, bitrate := range t.cfg.Bitrates {
+		name := bitrateToName(bitrate)
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		value, ok := bitrateValue(bitrate)
+		if len(variants) > 0 && maxBitrate > 0 && (!ok || value > maxBitrate) {
+			continue
+		}
+		variants = append(variants, hlsVariant{Name: name, Bitrate: bitrate})
+		seen[name] = struct{}{}
+	}
+	if len(variants) == 0 && len(t.cfg.Bitrates) > 0 {
+		variants = append(variants, hlsVariant{Name: bitrateToName(t.cfg.Bitrates[0]), Bitrate: t.cfg.Bitrates[0]})
+	}
+	return variants
+}
+
+func (t *Transcoder) gopSize(frameRate float64) int {
+	if frameRate <= 0 {
+		frameRate = 30
+	}
+	segmentDuration := t.cfg.SegmentDurationSec
+	if segmentDuration <= 0 {
+		segmentDuration = 4
+	}
+	return max(1, int(math.Round(frameRate*float64(segmentDuration))))
 }
 
 func (t *Transcoder) generateThumbnails(ctx context.Context, inputPath, outputDir string) error {
@@ -170,25 +229,12 @@ func thumbnailFilename(variant config.ImageVariant) string {
 	return key + ".jpg"
 }
 
-// probeDuration возвращает длительность видео через ffprobe.
 func (t *Transcoder) probeDuration(ctx context.Context, inputPath string) (float64, error) {
-	cmd := exec.CommandContext(ctx, t.cfg.FFprobePath,
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		inputPath,
-	)
-	out, err := cmd.Output()
+	info, err := probeVideoInfo(ctx, t.cfg.FFprobePath, inputPath)
 	if err != nil {
-		return 0, fmt.Errorf("ffprobe failed: %w", err)
+		return 0, err
 	}
-
-	var dur float64
-	_, err = fmt.Sscanf(strings.TrimSpace(string(out)), "%f", &dur)
-	if err != nil {
-		return 0, fmt.Errorf("parse duration: %w", err)
-	}
-	return dur, nil
+	return info.Duration, nil
 }
 
 // bitrateToName конвертирует битрейт в имя варианта ("500k" → "low", "1500k" → "medium", etc.)
@@ -224,4 +270,18 @@ func multiplyBitrate(br string, factor int) string {
 		return br
 	}
 	return fmt.Sprintf("%dk", val*factor)
+}
+
+func bitrateValue(bitrate string) (int64, bool) {
+	value := strings.TrimSpace(strings.ToLower(bitrate))
+	multiplier := int64(1)
+	if strings.HasSuffix(value, "k") {
+		multiplier = 1000
+		value = strings.TrimSuffix(value, "k")
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0, false
+	}
+	return parsed * multiplier, true
 }

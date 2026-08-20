@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/borg001/ipfs-filestorage/internal/bundle"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
@@ -146,12 +145,6 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeUploadError(w, r, http.StatusServiceUnavailable, "upload_storage_unavailable", nil)
 		return
-	}
-
-	// Репликация всех CID
-	retryDelay := time.Duration(h.cfg.Pinning.RetryDelayMs) * time.Millisecond
-	for _, cid := range uploadResult.AllCIDs {
-		_ = h.cluster.ClusterReplicate(ctx, cid, h.cfg.Pinning.Retries, retryDelay)
 	}
 
 	// Сохраняем маппинг master_cid → all_cids для будущего группового удаления.

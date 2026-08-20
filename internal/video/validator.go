@@ -18,6 +18,8 @@ type VideoInfo struct {
 	Height    int     `json:"height"`
 	Rotation  int     `json:"rotation"`
 	CodecName string  `json:"codec_name"`
+	FrameRate float64 `json:"frame_rate"`
+	BitRate   int64   `json:"bit_rate"`
 }
 
 // ValidationError describes a rejected input without exposing an ffprobe or
@@ -115,7 +117,14 @@ func (info *VideoInfo) DisplayDimensions() (int, int) {
 
 // Probe получает метаданные видео через ffprobe.
 func (v *Validator) Probe(ctx context.Context, inputPath string) (*VideoInfo, error) {
-	cmd := exec.CommandContext(ctx, v.cfg.FFprobePath,
+	return probeVideoInfo(ctx, v.cfg.FFprobePath, inputPath)
+}
+
+// probeVideoInfo reads the video stream metadata used by both validation and
+// transcoding. Keeping one parser prevents the output ladder from disagreeing
+// with the validation that accepted the original upload.
+func probeVideoInfo(ctx context.Context, ffprobePath, inputPath string) (*VideoInfo, error) {
+	cmd := exec.CommandContext(ctx, ffprobePath,
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_streams",
@@ -130,12 +139,14 @@ func (v *Validator) Probe(ctx context.Context, inputPath string) (*VideoInfo, er
 	var result struct {
 		Format struct {
 			Duration string `json:"duration"`
+			BitRate  string `json:"bit_rate"`
 		} `json:"format"`
 		Streams []struct {
 			Duration  string `json:"duration"`
 			Width     int    `json:"width"`
 			Height    int    `json:"height"`
 			CodecName string `json:"codec_name"`
+			FrameRate string `json:"avg_frame_rate"`
 			Tags      struct {
 				Rotate string `json:"rotate"`
 			} `json:"tags"`
@@ -167,11 +178,31 @@ func (v *Validator) Probe(ctx context.Context, inputPath string) (*VideoInfo, er
 			break
 		}
 	}
+	frameRate := parseFrameRate(stream.FrameRate)
+	bitRate, _ := strconv.ParseInt(strings.TrimSpace(result.Format.BitRate), 10, 64)
 	return &VideoInfo{
 		Duration:  parsedDuration,
 		Width:     stream.Width,
 		Height:    stream.Height,
 		Rotation:  rotation,
 		CodecName: stream.CodecName,
+		FrameRate: frameRate,
+		BitRate:   bitRate,
 	}, nil
+}
+
+func parseFrameRate(value string) float64 {
+	parts := strings.Split(strings.TrimSpace(value), "/")
+	if len(parts) != 2 {
+		return 0
+	}
+	numerator, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0
+	}
+	denominator, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil || denominator <= 0 {
+		return 0
+	}
+	return numerator / denominator
 }

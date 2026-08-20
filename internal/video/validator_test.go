@@ -245,6 +245,15 @@ func TestWithProber(t *testing.T) {
 	}
 }
 
+func TestParseFrameRate(t *testing.T) {
+	if got := parseFrameRate("30000/1001"); got < 29.9 || got > 30.0 {
+		t.Fatalf("parseFrameRate(30000/1001) = %f, want about 29.97", got)
+	}
+	if got := parseFrameRate("invalid"); got != 0 {
+		t.Fatalf("parseFrameRate(invalid) = %f, want 0", got)
+	}
+}
+
 func TestValidateProbeReturnsError(t *testing.T) {
 	cfg := &config.VideoConfig{
 		MaxSizeBytes:         100 * 1024 * 1024,
