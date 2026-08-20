@@ -406,11 +406,11 @@ GET /config
       },
       "video": {
         "accept": "video/mp4,video/quicktime,...",
-        "max_bytes": 31457280,
-        "max_size_label": "30 МБ",
-        "max_duration_sec": 60,
+        "max_bytes": 1073741824,
+        "max_size_label": "1 ГБ",
+        "max_duration_sec": 2400,
         "expected_aspect_ratio": "9:16",
-        "description": "MP4, MOV, WebM, AVI, MKV до 30 МБ, до 60 сек., вертикальное 9:16"
+        "description": "MP4, MOV, WebM, AVI, MKV до 1 ГБ, до 40 мин., вертикальное 9:16"
       }
     }
   }

@@ -81,3 +81,36 @@ func TestHandleConfig_LocalizesPublicUploadDescriptions(t *testing.T) {
 		t.Fatalf("Unexpected Russian video description: %q", resp.Upload.Media.Video.Description)
 	}
 }
+
+func TestHandleConfig_FormatsLargeVideoLimitsForPeople(t *testing.T) {
+	h := setupTestHandler(&config.Config{
+		Video: config.VideoConfig{MaxSizeBytes: 1024 * 1024 * 1024, MaxDurationSec: 2400},
+	})
+
+	for _, testCase := range []struct {
+		name        string
+		locale      string
+		sizeLabel   string
+		description string
+	}{
+		{name: "english", sizeLabel: "1 GB", description: "MP4, MOV, WebM, AVI, MKV up to 1 GB, up to 40 min, vertical 9:16"},
+		{name: "russian", locale: "ru", sizeLabel: "1 ГБ", description: "MP4, MOV, WebM, AVI, MKV до 1 ГБ, до 40 мин., вертикальное 9:16"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/config?lang="+testCase.locale, nil)
+			response := httptest.NewRecorder()
+			h.HandleConfig(response, request)
+
+			var payload publicConfigResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Upload.Media.Video.MaxSizeLabel != testCase.sizeLabel {
+				t.Fatalf("MaxSizeLabel = %q, want %q", payload.Upload.Media.Video.MaxSizeLabel, testCase.sizeLabel)
+			}
+			if payload.Upload.Media.Video.Description != testCase.description {
+				t.Fatalf("Description = %q, want %q", payload.Upload.Media.Video.Description, testCase.description)
+			}
+		})
+	}
+}

@@ -3,7 +3,6 @@ package handler
 import (
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
@@ -63,13 +62,14 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	videoTypes := []string{"video/mp4", "video/quicktime", "video/webm", "video/x-msvideo", "video/x-matroska"}
 	imageMax := humanFileSize(h.cfg.Upload.MaxFileSize, locale)
 	videoMax := humanFileSize(h.cfg.Video.MaxSizeBytes, locale)
+	videoDuration := humanDuration(h.cfg.Video.MaxDurationSec, locale)
 	imageDescription := "JPEG, PNG, WebP up to " + imageMax
-	videoDescription := "MP4, MOV, WebM, AVI, MKV up to " + videoMax + ", up to " + strconv.Itoa(h.cfg.Video.MaxDurationSec) + " sec, vertical 9:16"
+	videoDescription := "MP4, MOV, WebM, AVI, MKV up to " + videoMax + ", up to " + videoDuration + ", vertical 9:16"
 	imageTooLarge := "The file exceeds the " + imageMax + " limit."
 	videoTooLarge := "The file exceeds the " + videoMax + " limit."
 	if locale == "ru" {
 		imageDescription = "JPEG, PNG, WebP до " + imageMax
-		videoDescription = "MP4, MOV, WebM, AVI, MKV до " + videoMax + ", до " + strconv.Itoa(h.cfg.Video.MaxDurationSec) + " сек., вертикальное 9:16"
+		videoDescription = "MP4, MOV, WebM, AVI, MKV до " + videoMax + ", до " + videoDuration + ", вертикальное 9:16"
 		imageTooLarge = "Размер файла превышает допустимые " + imageMax + "."
 		videoTooLarge = "Размер файла превышает допустимые " + videoMax + "."
 	}

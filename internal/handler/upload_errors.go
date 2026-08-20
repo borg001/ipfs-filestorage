@@ -109,6 +109,14 @@ func humanFileSize(bytes int64, locale string) string {
 		return "configured"
 	}
 	const megabyte = 1024 * 1024
+	const gigabyte = 1024 * megabyte
+	if bytes%gigabyte == 0 {
+		unit := "GB"
+		if locale == "ru" {
+			unit = "ГБ"
+		}
+		return fmt.Sprintf("%d %s", bytes/gigabyte, unit)
+	}
 	if bytes%megabyte == 0 {
 		unit := "MB"
 		if locale == "ru" {
@@ -121,4 +129,17 @@ func humanFileSize(bytes int64, locale string) string {
 		unit = "КБ"
 	}
 	return fmt.Sprintf("%.1f %s", float64(bytes)/1024, unit)
+}
+
+func humanDuration(seconds int, locale string) string {
+	if seconds >= 120 && seconds%60 == 0 {
+		if locale == "ru" {
+			return fmt.Sprintf("%d мин.", seconds/60)
+		}
+		return fmt.Sprintf("%d min", seconds/60)
+	}
+	if locale == "ru" {
+		return fmt.Sprintf("%d сек.", seconds)
+	}
+	return fmt.Sprintf("%d sec", seconds)
 }
