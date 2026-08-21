@@ -75,17 +75,22 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 	}
 	endpoint := *r.endpoint
 	query := endpoint.Query()
-	if cid != "" {
-		query.Set("search", cid)
+	mediaLink := requestedMediaLink
+	if source != nil && mediaLink == "" {
+		mediaLink = strings.TrimSpace(source.URL.Query().Get("media_link"))
 	}
-	query.Set("size", "2")
-	if requestedMediaLink != "" {
-		query.Set("media_link", requestedMediaLink)
-	}
-	if source != nil {
-		if mediaLink := strings.TrimSpace(source.URL.Query().Get("media_link")); mediaLink != "" && requestedMediaLink == "" {
-			query.Set("media_link", mediaLink)
+	if mediaLink != "" {
+		// The opaque link is the policy resource. A standard generator view
+		// avoids the list action's second COUNT query on every file request.
+		endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/view/id/" + url.PathEscape(mediaLink)
+		query.Del("search")
+		query.Del("size")
+		query.Del("media_link")
+	} else {
+		if cid != "" {
+			query.Set("search", cid)
 		}
+		query.Set("size", "2")
 	}
 	endpoint.RawQuery = query.Encode()
 
@@ -106,9 +111,13 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 
 	var payload struct {
 		Rows []map[string]interface{} `json:"rows"`
+		Item map[string]interface{}   `json:"item"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
 		return mediaDeliveryDecision{}, fmt.Errorf("decode media policy: %w", err)
+	}
+	if payload.Item != nil {
+		payload.Rows = []map[string]interface{}{payload.Item}
 	}
 	if len(payload.Rows) == 0 {
 		return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
