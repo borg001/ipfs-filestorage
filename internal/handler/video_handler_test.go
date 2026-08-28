@@ -123,20 +123,17 @@ func TestHandleStreamLinkRewritesEveryHLSReferenceWithoutCIDs(t *testing.T) {
 	cluster := h.cluster.(*mockCluster)
 
 	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("media_link"); got != "77" {
-			t.Fatalf("media_link = %q, want 77", got)
-		}
-		if got := r.URL.Query().Get("search"); got != "" {
-			t.Fatalf("opaque route sent CID in search=%q", got)
+		if got := r.URL.Path; got != "/view/id/77" {
+			t.Fatalf("policy path = %q, want /view/id/77", got)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer viewer-token" {
 			t.Fatalf("Authorization = %q, want forwarded token", got)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{{
-			"delivery_mode": "original",
-			"storage_uri":   "video://" + testMasterCID,
-			"poster_uri":    "ipfs://" + testPosterCID,
-		}}})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"item": map[string]interface{}{
+			"delivery_mode": map[string]interface{}{"value": "original"},
+			"storage_uri":   map[string]interface{}{"value": "video://" + testMasterCID},
+			"poster_uri":    map[string]interface{}{"value": "ipfs://" + testPosterCID},
+		}})
 	}))
 	defer policy.Close()
 	h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
@@ -195,19 +192,19 @@ func TestHandleStreamLinkServesBlurredPosterForPrivateVideo(t *testing.T) {
 	cluster.files[blurredPosterCID] = []byte("blurred-poster")
 
 	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("media_link"); got != "77" {
-			t.Fatalf("media_link = %q, want 77", got)
+		if got := r.URL.Path; got != "/view/id/77" {
+			t.Fatalf("policy path = %q, want /view/id/77", got)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{{
-			"delivery_mode": "blur",
-			"storage_uri":   "video://" + testMasterCID,
-			"poster_uri":    "ipfs://" + testPosterCID,
-			"metadata": map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"item": map[string]interface{}{
+			"delivery_mode": map[string]interface{}{"value": "blur"},
+			"storage_uri":   map[string]interface{}{"value": "video://" + testMasterCID},
+			"poster_uri":    map[string]interface{}{"value": "ipfs://" + testPosterCID},
+			"metadata": map[string]interface{}{"value": map[string]interface{}{
 				"poster_aliases": map[string]interface{}{
 					testPosterCID: map[string]interface{}{"blur": blurredPosterCID},
 				},
-			},
-		}}})
+			}},
+		}})
 	}))
 	defer policy.Close()
 	h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})

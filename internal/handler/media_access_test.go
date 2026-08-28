@@ -67,10 +67,10 @@ func TestHandleFileUsesProtectedImageVariantFromPolicy(t *testing.T) {
 
 func TestMediaPolicyForwardsGalleryLinkContext(t *testing.T) {
 	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("media_link"); got != "55" {
-			t.Fatalf("media_link = %q, want 55", got)
+		if got := r.URL.Path; got != "/view/id/55" {
+			t.Fatalf("policy path = %q, want /view/id/55", got)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{}})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"item": nil})
 	}))
 	defer policy.Close()
 
@@ -89,20 +89,17 @@ func TestMediaPolicyResolvesOpaqueLinkWithoutCIDInBrowserRequest(t *testing.T) {
 	sourceCID := testCID("OpaqueSource")
 	posterCID := testCID("OpaquePoster")
 	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("search"); got != "" {
-			t.Fatalf("opaque link policy must not receive search CID, got %q", got)
-		}
-		if got := r.URL.Query().Get("media_link"); got != "77" {
-			t.Fatalf("media_link = %q, want 77", got)
+		if got := r.URL.Path; got != "/view/id/77" {
+			t.Fatalf("policy path = %q, want /view/id/77", got)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer viewer-token" {
 			t.Fatalf("policy Authorization = %q, want forwarded bearer token", got)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{{
-			"delivery_mode": "blur_faces",
-			"storage_uri":   "ipfs://" + sourceCID,
-			"poster_uri":    "ipfs://" + posterCID,
-		}}})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"item": map[string]interface{}{
+			"delivery_mode": map[string]interface{}{"value": "blur_faces"},
+			"storage_uri":   map[string]interface{}{"value": "ipfs://" + sourceCID},
+			"poster_uri":    map[string]interface{}{"value": "ipfs://" + posterCID},
+		}})
 	}))
 	defer policy.Close()
 
@@ -123,16 +120,13 @@ func TestMediaPolicyResolvesOpaqueLinkWithoutCIDInBrowserRequest(t *testing.T) {
 func TestHandleFileLinkServesProtectedRenditionWithoutCIDInRequest(t *testing.T) {
 	sourceCID := testCID("OpaqueFileSource")
 	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("search"); got != "" {
-			t.Fatalf("opaque file policy unexpectedly received CID %q", got)
+		if got := r.URL.Path; got != "/view/id/91" {
+			t.Fatalf("policy path = %q, want /view/id/91", got)
 		}
-		if got := r.URL.Query().Get("media_link"); got != "91" {
-			t.Fatalf("media_link = %q, want 91", got)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{{
-			"delivery_mode": "blur",
-			"storage_uri":   "ipfs://" + sourceCID,
-		}}})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"item": map[string]interface{}{
+			"delivery_mode": map[string]interface{}{"value": "blur"},
+			"storage_uri":   map[string]interface{}{"value": "ipfs://" + sourceCID},
+		}})
 	}))
 	defer policy.Close()
 
