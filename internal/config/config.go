@@ -175,10 +175,14 @@ type AuthConfig struct {
 	LuaMaxMemoryMB int
 }
 
-// MediaAccessConfig points to the authenticated generator resource that
-// decides which rendition of profile media a caller may receive.
+// MediaAccessConfig points to authenticated generator resources that decide
+// which rendition of media a caller may receive.
 type MediaAccessConfig struct {
-	URL       string
+	// URL resolves legacy CID requests through the bounded list policy resource.
+	URL string
+	// LinkURL resolves opaque /file/link/{id} requests. An empty value falls
+	// back to URL for single-endpoint deployments.
+	LinkURL   string
 	TimeoutMs int
 }
 
@@ -293,6 +297,7 @@ func Load() *Config {
 		},
 		MediaAccess: MediaAccessConfig{
 			URL:       getEnv("MEDIA_ACCESS_URL", ""),
+			LinkURL:   getEnv("MEDIA_LINK_ACCESS_URL", ""),
 			TimeoutMs: clampInt(getEnvInt("MEDIA_ACCESS_TIMEOUT_MS", 2500), 100, 30000),
 		},
 		RateLimit: RateLimitConfig{
