@@ -117,6 +117,34 @@ func TestMediaPolicyResolvesOpaqueLinkWithoutCIDInBrowserRequest(t *testing.T) {
 	}
 }
 
+func TestMediaPolicyUsesDedicatedOpaqueLinkEndpoint(t *testing.T) {
+	sourceCID := testCID("DedicatedOpaqueSource")
+	cidPolicy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("CID policy must not receive opaque link request: %s", r.URL)
+	}))
+	defer cidPolicy.Close()
+	linkPolicy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/view/id/81" {
+			t.Fatalf("opaque policy path = %q, want /view/id/81", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"item": map[string]interface{}{
+			"delivery_mode": map[string]interface{}{"value": "original"},
+			"storage_uri":   map[string]interface{}{"value": "ipfs://" + sourceCID},
+		}})
+	}))
+	defer linkPolicy.Close()
+
+	resolver := newMediaAccessResolver(config.MediaAccessConfig{URL: cidPolicy.URL, LinkURL: linkPolicy.URL, TimeoutMs: 1000})
+	request := httptest.NewRequest(http.MethodGet, "/file/link/81/320x320?token=viewer-token", nil)
+	decision, err := resolver.ResolveLink(request.Context(), request, "81")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.SourceCID != sourceCID || !decision.Managed {
+		t.Fatalf("opaque policy decision = %#v", decision)
+	}
+}
+
 func TestHandleFileLinkServesProtectedRenditionWithoutCIDInRequest(t *testing.T) {
 	sourceCID := testCID("OpaqueFileSource")
 	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

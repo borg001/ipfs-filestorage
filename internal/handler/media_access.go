@@ -22,8 +22,9 @@ const (
 )
 
 type mediaAccessResolver struct {
-	endpoint *url.URL
-	client   *http.Client
+	cidEndpoint  *url.URL
+	linkEndpoint *url.URL
+	client       *http.Client
 }
 
 type mediaDeliveryDecision struct {
@@ -35,15 +36,22 @@ type mediaDeliveryDecision struct {
 }
 
 func newMediaAccessResolver(cfg config.MediaAccessConfig) *mediaAccessResolver {
-	endpoint, err := url.Parse(strings.TrimSpace(cfg.URL))
-	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+	cidEndpoint, err := url.Parse(strings.TrimSpace(cfg.URL))
+	if err != nil || cidEndpoint.Scheme == "" || cidEndpoint.Host == "" {
 		return nil
+	}
+	linkEndpoint := cidEndpoint
+	if configured := strings.TrimSpace(cfg.LinkURL); configured != "" {
+		linkEndpoint, err = url.Parse(configured)
+		if err != nil || linkEndpoint.Scheme == "" || linkEndpoint.Host == "" {
+			return nil
+		}
 	}
 	timeout := time.Duration(cfg.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 2500 * time.Millisecond
 	}
-	return &mediaAccessResolver{endpoint: endpoint, client: &http.Client{Timeout: timeout}}
+	return &mediaAccessResolver{cidEndpoint: cidEndpoint, linkEndpoint: linkEndpoint, client: &http.Client{Timeout: timeout}}
 }
 
 // Resolve returns managed=false for files not owned by the profile gallery.
@@ -73,13 +81,14 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 	if r == nil {
 		return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
 	}
-	endpoint := *r.endpoint
+	endpoint := *r.cidEndpoint
 	query := endpoint.Query()
 	mediaLink := requestedMediaLink
 	if source != nil && mediaLink == "" {
 		mediaLink = strings.TrimSpace(source.URL.Query().Get("media_link"))
 	}
 	if mediaLink != "" {
+		endpoint = *r.linkEndpoint
 		// The opaque link is the policy resource. A standard generator view
 		// avoids the list action's second COUNT query on every file request.
 		endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/view/id/" + url.PathEscape(mediaLink)

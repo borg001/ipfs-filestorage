@@ -18,7 +18,7 @@ func TestLoadDefaults(t *testing.T) {
 		"VIDEO_BITRATES", "FFMPEG_PATH", "FFPROBE_PATH", "VIDEO_TEMP_DIR",
 		"IMAGE_BLUR_RADIUS", "IMAGE_FACE_BLUR_RADIUS", "IMAGE_FACE_DETECTION_MAX_DIMENSION",
 		"IMAGE_FACE_DETECTION_SCORE_THRESHOLD", "IMAGE_FACE_DETECTION_NMS_THRESHOLD",
-		"MEDIA_ACCESS_URL", "MEDIA_ACCESS_TIMEOUT_MS",
+		"MEDIA_ACCESS_URL", "MEDIA_LINK_ACCESS_URL", "MEDIA_ACCESS_TIMEOUT_MS",
 	}
 	for _, k := range envKeys {
 		os.Unsetenv(k)
@@ -62,7 +62,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Image.Privacy != DefaultImagePrivacyConfig() {
 		t.Errorf("Default Image.Privacy = %+v, want %+v", cfg.Image.Privacy, DefaultImagePrivacyConfig())
 	}
-	if cfg.MediaAccess.URL != "" || cfg.MediaAccess.TimeoutMs != 2500 {
+	if cfg.MediaAccess.URL != "" || cfg.MediaAccess.LinkURL != "" || cfg.MediaAccess.TimeoutMs != 2500 {
 		t.Errorf("Default MediaAccess = %+v, want disabled with 2500ms timeout", cfg.MediaAccess)
 	}
 }
@@ -81,6 +81,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("IMAGE_FACE_DETECTION_SCORE_THRESHOLD", "0.87")
 	t.Setenv("IMAGE_FACE_DETECTION_NMS_THRESHOLD", "0.42")
 	t.Setenv("MEDIA_ACCESS_URL", "http://api.internal/api/media_delivery")
+	t.Setenv("MEDIA_LINK_ACCESS_URL", "http://api.internal/api/media_delivery_link")
 	t.Setenv("MEDIA_ACCESS_TIMEOUT_MS", "1800")
 
 	cfg := Load()
@@ -112,7 +113,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	if got := cfg.Image.Privacy; got.BlurRadius != 31 || got.FaceBlurRadius != 19 || got.FaceDetectionMaxDimension != 960 || got.FaceDetectionScoreThreshold != 0.87 || got.FaceDetectionNMSThreshold != 0.42 {
 		t.Errorf("Image.Privacy override = %+v", got)
 	}
-	if cfg.MediaAccess.URL != "http://api.internal/api/media_delivery" || cfg.MediaAccess.TimeoutMs != 1800 {
+	if cfg.MediaAccess.URL != "http://api.internal/api/media_delivery" || cfg.MediaAccess.LinkURL != "http://api.internal/api/media_delivery_link" || cfg.MediaAccess.TimeoutMs != 1800 {
 		t.Errorf("MediaAccess override = %+v", cfg.MediaAccess)
 	}
 }
