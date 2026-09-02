@@ -301,8 +301,11 @@ func Load() *Config {
 			TimeoutMs: clampInt(getEnvInt("MEDIA_ACCESS_TIMEOUT_MS", 2500), 100, 30000),
 		},
 		RateLimit: RateLimitConfig{
-			RPS:   getEnvFloat("RATE_LIMIT_RPS", 10),
-			Burst: getEnvInt("RATE_LIMIT_BURST", 20),
+			// A single media-heavy page loads many authenticated thumbnails in
+			// parallel. Keep the default above that normal browser burst while
+			// retaining a configurable per-client limiter for deployments.
+			RPS:   getEnvFloat("RATE_LIMIT_RPS", 100),
+			Burst: getEnvInt("RATE_LIMIT_BURST", 200),
 		},
 	}
 }
