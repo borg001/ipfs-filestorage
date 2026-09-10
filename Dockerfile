@@ -19,22 +19,22 @@ RUN go vet ./... && go test ./...
 FROM debian:bullseye-slim
 
 # ffmpeg для видеотранскодирования, jpegtran для progressive JPEG variants,
-# libtbb2, GTK и OpenCV для локального YuNet face detection.
-RUN apt-get update && \
+# libheif для HEIC-снимков, libtbb2, GTK и OpenCV для локального YuNet face
+# detection.
+#
+# Bullseye has moved to the Debian archive: the mirrors no longer refresh its
+# release files, so the runtime packages are installed from the archive with the
+# validity window switched off. Without this the image cannot be rebuilt at all.
+RUN printf 'deb http://archive.debian.org/debian bullseye main\n' > /etc/apt/sources.list && \
+    apt-get -o Acquire::Check-Valid-Until=false update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       ffmpeg \
       libgtk2.0-0 \
+      libheif-examples \
       libjpeg-turbo-progs \
       libtbb2 \
     && rm -rf /var/lib/apt/lists/*
-
-# libheif turns an iPhone HEIC still into a JPEG at ingest. Bullseye has moved
-# to the Debian archive, so this package is installed from there.
-RUN printf 'deb http://archive.debian.org/debian bullseye main\n' > /etc/apt/sources.list.d/archive.list && \
-    apt-get -o Acquire::Check-Valid-Until=false update && \
-    apt-get install -y --no-install-recommends libheif-examples && \
-    rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/archive.list
 
 WORKDIR /app
 COPY --from=builder /usr/local/lib/ /usr/local/lib/
