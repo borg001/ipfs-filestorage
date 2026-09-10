@@ -54,7 +54,7 @@ func TestHandleConfig_ReturnsPublicImageConfig(t *testing.T) {
 	if resp.Upload.Media.Image.MaxSizeLabel != "10 MB" || resp.Upload.Media.Video.MaxSizeLabel != "30 MB" {
 		t.Fatalf("Unexpected public size labels: %+v", resp.Upload.Media)
 	}
-	if resp.Upload.Media.Video.MaxDurationSec != 60 || resp.Upload.Media.Video.ExpectedAspectRatio != "9:16" {
+	if resp.Upload.Media.Video.MaxDurationSec != 60 {
 		t.Fatalf("Unexpected public video policy: %+v", resp.Upload.Media.Video)
 	}
 	if resp.Upload.Media.Video.Accept == "" || len(resp.Upload.Media.Image.MimeTypes) != 3 {
@@ -113,7 +113,7 @@ func TestHandleConfig_LocalizesPublicUploadDescriptions(t *testing.T) {
 	if resp.Upload.Media.Image.Description != "JPEG, PNG, WebP, HEIC до 10 МБ" {
 		t.Fatalf("Unexpected Russian image description: %q", resp.Upload.Media.Image.Description)
 	}
-	if resp.Upload.Media.Video.Description != "MP4, MOV, WebM, AVI, MKV до 30 МБ, до 60 сек., вертикальное 9:16" {
+	if resp.Upload.Media.Video.Description != "MP4, MOV, WebM, AVI, MKV до 30 МБ, до 60 сек." {
 		t.Fatalf("Unexpected Russian video description: %q", resp.Upload.Media.Video.Description)
 	}
 }
@@ -129,8 +129,8 @@ func TestHandleConfig_FormatsLargeVideoLimitsForPeople(t *testing.T) {
 		sizeLabel   string
 		description string
 	}{
-		{name: "english", sizeLabel: "1 GB", description: "MP4, MOV, WebM, AVI, MKV up to 1 GB, up to 40 min, vertical 9:16"},
-		{name: "russian", locale: "ru", sizeLabel: "1 ГБ", description: "MP4, MOV, WebM, AVI, MKV до 1 ГБ, до 40 мин., вертикальное 9:16"},
+		{name: "english", sizeLabel: "1 GB", description: "MP4, MOV, WebM, AVI, MKV up to 1 GB, up to 40 min"},
+		{name: "russian", locale: "ru", sizeLabel: "1 ГБ", description: "MP4, MOV, WebM, AVI, MKV до 1 ГБ, до 40 мин."},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/config?lang="+testCase.locale, nil)

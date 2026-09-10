@@ -52,8 +52,7 @@ type mediaUploadPolicy struct {
 
 type videoUploadPolicy struct {
 	mediaUploadPolicy
-	MaxDurationSec      int    `json:"max_duration_sec"`
-	ExpectedAspectRatio string `json:"expected_aspect_ratio"`
+	MaxDurationSec int `json:"max_duration_sec"`
 }
 
 func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
@@ -64,12 +63,12 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	videoMax := humanFileSize(h.cfg.Video.MaxSizeBytes, locale)
 	videoDuration := humanDuration(h.cfg.Video.MaxDurationSec, locale)
 	imageDescription := "JPEG, PNG, WebP, HEIC up to " + imageMax
-	videoDescription := "MP4, MOV, WebM, AVI, MKV up to " + videoMax + ", up to " + videoDuration + ", vertical 9:16"
+	videoDescription := "MP4, MOV, WebM, AVI, MKV up to " + videoMax + ", up to " + videoDuration
 	imageTooLarge := "The file exceeds the " + imageMax + " limit."
 	videoTooLarge := "The file exceeds the " + videoMax + " limit."
 	if locale == "ru" {
 		imageDescription = "JPEG, PNG, WebP, HEIC до " + imageMax
-		videoDescription = "MP4, MOV, WebM, AVI, MKV до " + videoMax + ", до " + videoDuration + ", вертикальное 9:16"
+		videoDescription = "MP4, MOV, WebM, AVI, MKV до " + videoMax + ", до " + videoDuration
 		imageTooLarge = "Размер файла превышает допустимые " + imageMax + "."
 		videoTooLarge = "Размер файла превышает допустимые " + videoMax + "."
 	}
@@ -107,8 +106,7 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 					Description:     videoDescription,
 					TooLargeMessage: videoTooLarge,
 				},
-				MaxDurationSec:      h.cfg.Video.MaxDurationSec,
-				ExpectedAspectRatio: "9:16",
+				MaxDurationSec: h.cfg.Video.MaxDurationSec,
 			},
 		}},
 	})

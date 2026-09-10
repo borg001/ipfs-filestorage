@@ -206,7 +206,9 @@ func (t *Transcoder) generateThumbnails(ctx context.Context, inputPath, outputDi
 
 func (t *Transcoder) buildThumbnailArgs(inputPath, outputPath string, variant config.ImageVariant) []string {
 	size := fmt.Sprintf("%d:%d", variant.Width, variant.Height)
-	filter := fmt.Sprintf("scale=%s:force_original_aspect_ratio=increase,crop=%s", size, size)
+	// The variant is a bounding box, not a shape: a poster cropped to one shape
+	// would show a different picture than the video it stands for.
+	filter := fmt.Sprintf("scale=%s:force_original_aspect_ratio=decrease", size)
 	seek := fmt.Sprintf("%.3f", t.cfg.ThumbnailTimeSec)
 	qscale := fmt.Sprintf("%d", t.cfg.ThumbnailQScale)
 	return []string{

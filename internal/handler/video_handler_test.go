@@ -538,18 +538,20 @@ func TestHandleUploadVideoTooLarge(t *testing.T) {
 	}
 }
 
-func TestHandleUploadVideo_LocalizesAspectRatioFailure(t *testing.T) {
+// The shape of a video is no longer a reason to refuse it, so a refusal a
+// person can act on is the duration one. The direct handler response is
+// covered here because ffprobe is deliberately mocked in validator tests;
+// HTTP presentation must remain localized.
+func TestHandleUploadVideo_LocalizesDurationFailure(t *testing.T) {
 	response := uploadErrorResponse{}
-	// The direct handler response is covered here because ffprobe is deliberately
-	// mocked in validator tests; HTTP presentation must remain localized.
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/upload-video?lang=ru", nil)
-	writeUploadError(w, req, http.StatusBadRequest, "video_aspect_ratio_invalid", map[string]any{"expected_aspect_ratio": "9:16"})
+	writeUploadError(w, req, http.StatusBadRequest, "video_duration_exceeded", map[string]any{"max_duration_sec": 60})
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != "video_aspect_ratio_invalid" || response.Message != "Можно загрузить только вертикальное видео 9:16." {
-		t.Fatalf("Unexpected localized aspect error: %+v", response)
+	if response.Code != "video_duration_exceeded" || response.Message != "Длительность видео превышает допустимые 60 сек." {
+		t.Fatalf("Unexpected localized duration error: %+v", response)
 	}
 }
 

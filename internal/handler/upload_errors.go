@@ -36,7 +36,6 @@ func uploadLocale(r *http.Request) string {
 func localizedUploadMessage(locale, code string, details map[string]any) string {
 	maxSize := humanFileSize(numberDetail(details, "max_bytes"), locale)
 	maxDuration := int(numberDetail(details, "max_duration_sec"))
-	expectedRatio, _ := details["expected_aspect_ratio"].(string)
 	if locale == "ru" {
 		switch code {
 		case "upload_missing_file":
@@ -47,8 +46,6 @@ func localizedUploadMessage(locale, code string, details map[string]any) string 
 			return fmt.Sprintf("Размер файла превышает допустимые %s.", maxSize)
 		case "video_duration_exceeded":
 			return fmt.Sprintf("Длительность видео превышает допустимые %d сек.", maxDuration)
-		case "video_aspect_ratio_invalid":
-			return fmt.Sprintf("Можно загрузить только вертикальное видео %s.", expectedRatio)
 		case "video_metadata_invalid":
 			return "Не удалось определить параметры видео. Выберите корректный видеофайл."
 		case "upload_form_invalid":
@@ -69,8 +66,6 @@ func localizedUploadMessage(locale, code string, details map[string]any) string 
 		return fmt.Sprintf("The file exceeds the %s limit.", maxSize)
 	case "video_duration_exceeded":
 		return fmt.Sprintf("The video exceeds the %d second duration limit.", maxDuration)
-	case "video_aspect_ratio_invalid":
-		return fmt.Sprintf("Only vertical %s video can be uploaded.", expectedRatio)
 	case "video_metadata_invalid":
 		return "Video details could not be read. Choose a valid video file."
 	case "upload_form_invalid":

@@ -26,10 +26,9 @@ type VideoInfo struct {
 // filesystem error to an HTTP client. The handler turns Code and limits into a
 // localized public response.
 type ValidationError struct {
-	Code                string
-	MaxSizeBytes        int64
-	MaxDurationSec      int
-	ExpectedAspectRatio string
+	Code           string
+	MaxSizeBytes   int64
+	MaxDurationSec int
 }
 
 func (e *ValidationError) Error() string {
@@ -67,7 +66,10 @@ func (v *Validator) WithProber(p VideoProber) *Validator {
 // Validate проверяет видео на соответствие требованиям:
 // - размер файла ≤ MaxSizeBytes
 // - длительность ≤ MaxDurationSec
-// - вертикальная ориентация (9:16 с допуском AspectRatioTolerance)
+//
+// The shape of the frame is not one of them. A publication carries the frame
+// it is shown in, chosen when it is composed, so a video is accepted as it was
+// shot and cropped to that frame where it is presented.
 func (v *Validator) Validate(ctx context.Context, inputPath string, fileSize int64) error {
 	if fileSize > v.cfg.MaxSizeBytes {
 		return &ValidationError{Code: "video_file_too_large", MaxSizeBytes: v.cfg.MaxSizeBytes}
@@ -82,37 +84,7 @@ func (v *Validator) Validate(ctx context.Context, inputPath string, fileSize int
 		return &ValidationError{Code: "video_duration_exceeded", MaxDurationSec: v.cfg.MaxDurationSec}
 	}
 
-	width, height := info.DisplayDimensions()
-	if width > 0 && height > 0 {
-		ratio := float64(width) / float64(height)
-		target := 9.0 / 16.0
-		diff := ratio - target
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff > v.cfg.AspectRatioTolerance {
-			return &ValidationError{Code: "video_aspect_ratio_invalid", ExpectedAspectRatio: "9:16"}
-		}
-	}
-
 	return nil
-}
-
-// DisplayDimensions applies the stream rotation metadata before validating the
-// visual frame. Phone cameras commonly store landscape pixels with a 90/270
-// degree display matrix; those files are still vertical videos to a viewer.
-func (info *VideoInfo) DisplayDimensions() (int, int) {
-	if info == nil {
-		return 0, 0
-	}
-	rotation := info.Rotation % 360
-	if rotation < 0 {
-		rotation += 360
-	}
-	if rotation == 90 || rotation == 270 {
-		return info.Height, info.Width
-	}
-	return info.Width, info.Height
 }
 
 // Probe получает метаданные видео через ffprobe.

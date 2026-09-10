@@ -110,9 +110,6 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 			if validationError.MaxDurationSec > 0 {
 				details["max_duration_sec"] = validationError.MaxDurationSec
 			}
-			if validationError.ExpectedAspectRatio != "" {
-				details["expected_aspect_ratio"] = validationError.ExpectedAspectRatio
-			}
 			writeUploadError(w, r, http.StatusBadRequest, validationError.Code, details)
 			return
 		}

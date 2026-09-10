@@ -247,7 +247,7 @@ func TestBuildThumbnailArgs(t *testing.T) {
 	if !strings.Contains(argsStr, "-frames:v 1") {
 		t.Error("Missing single-frame extraction")
 	}
-	if !strings.Contains(argsStr, "scale=180:320:force_original_aspect_ratio=increase,crop=180:320") {
+	if !strings.Contains(argsStr, "scale=180:320:force_original_aspect_ratio=decrease") {
 		t.Error("Missing cover crop thumbnail filter")
 	}
 	if !strings.Contains(argsStr, "-q:v 4") {

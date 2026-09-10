@@ -44,9 +44,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Video.MaxSizeBytes != 1024*1024*1024 {
 		t.Errorf("Default Video.MaxSizeBytes = %d, want 1024MB", cfg.Video.MaxSizeBytes)
 	}
-	if cfg.Video.AspectRatioTolerance != 0.1 {
-		t.Errorf("Default Video.AspectRatioTolerance = %f, want 0.1", cfg.Video.AspectRatioTolerance)
-	}
 	if cfg.Video.SegmentDurationSec != 4 {
 		t.Errorf("Default Video.SegmentDurationSec = %d, want 4", cfg.Video.SegmentDurationSec)
 	}
@@ -155,11 +152,11 @@ func TestGetEnvDurationInvalid(t *testing.T) {
 }
 
 func TestGetEnvFloatInvalid(t *testing.T) {
-	t.Setenv("VIDEO_ASPECT_RATIO_TOLERANCE", "notafloat")
+	t.Setenv("IMAGE_FACE_DETECTION_SCORE_THRESHOLD", "notafloat")
 	cfg := Load()
 
-	if cfg.Video.AspectRatioTolerance != 0.1 {
-		t.Errorf("Video.AspectRatioTolerance with invalid env = %f, want default 0.1", cfg.Video.AspectRatioTolerance)
+	if cfg.Image.Privacy.FaceDetectionScoreThreshold != 0.8 {
+		t.Errorf("Image.Privacy.FaceDetectionScoreThreshold with invalid env = %f, want default 0.8", cfg.Image.Privacy.FaceDetectionScoreThreshold)
 	}
 }
 

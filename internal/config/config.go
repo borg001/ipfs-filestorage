@@ -144,7 +144,6 @@ type VideoConfig struct {
 	// Макс. размер исходного файла (байт)
 	MaxSizeBytes int64
 	// Допустимое отклонение от пропорции 9:16
-	AspectRatioTolerance float64
 	// Длительность одного чанка (сек)
 	SegmentDurationSec int
 	// Список битрейтов для адаптивного стриминга (напр. ["500k","1500k","4000k"])
@@ -280,14 +279,13 @@ func Load() *Config {
 			}),
 		},
 		Video: VideoConfig{
-			MaxDurationSec:       getEnvInt("VIDEO_MAX_DURATION_SEC", 2400),
-			MaxSizeBytes:         getEnvInt64("VIDEO_MAX_SIZE_MB", 1024) * 1024 * 1024,
-			AspectRatioTolerance: getEnvFloat("VIDEO_ASPECT_RATIO_TOLERANCE", 0.1),
-			SegmentDurationSec:   getEnvInt("VIDEO_SEGMENT_DURATION_SEC", 4),
-			Bitrates:             getEnvSlice("VIDEO_BITRATES", []string{"500k", "1500k", "4000k"}),
-			FFmpegPath:           validateBinaryPath(getEnv("FFMPEG_PATH", "ffmpeg"), "ffmpeg"),
-			FFprobePath:          validateBinaryPath(getEnv("FFPROBE_PATH", "ffprobe"), "ffprobe"),
-			TempDir:              getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
+			MaxDurationSec:     getEnvInt("VIDEO_MAX_DURATION_SEC", 2400),
+			MaxSizeBytes:       getEnvInt64("VIDEO_MAX_SIZE_MB", 1024) * 1024 * 1024,
+			SegmentDurationSec: getEnvInt("VIDEO_SEGMENT_DURATION_SEC", 4),
+			Bitrates:           getEnvSlice("VIDEO_BITRATES", []string{"500k", "1500k", "4000k"}),
+			FFmpegPath:         validateBinaryPath(getEnv("FFMPEG_PATH", "ffmpeg"), "ffmpeg"),
+			FFprobePath:        validateBinaryPath(getEnv("FFPROBE_PATH", "ffprobe"), "ffprobe"),
+			TempDir:            getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
 			ThumbnailVariants: getEnvImageVariants("VIDEO_THUMBNAIL_VARIANTS", []ImageVariant{
 				{Key: "180x320", Width: 180, Height: 320},
 				{Key: "360x640", Width: 360, Height: 640},
