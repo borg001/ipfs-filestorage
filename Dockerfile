@@ -29,6 +29,13 @@ RUN apt-get update && \
       libtbb2 \
     && rm -rf /var/lib/apt/lists/*
 
+# libheif turns an iPhone HEIC still into a JPEG at ingest. Bullseye has moved
+# to the Debian archive, so this package is installed from there.
+RUN printf 'deb http://archive.debian.org/debian bullseye main\n' > /etc/apt/sources.list.d/archive.list && \
+    apt-get -o Acquire::Check-Valid-Until=false update && \
+    apt-get install -y --no-install-recommends libheif-examples && \
+    rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/archive.list
+
 WORKDIR /app
 COPY --from=builder /usr/local/lib/ /usr/local/lib/
 COPY --from=builder /bin/server /app/server

@@ -232,7 +232,20 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	contentType := http.DetectContentType(data)
-	manifest, err := h.buildFileBundle(ctx, header.Filename, data, contentType)
+	filename := header.Filename
+	if imageproc.IsHEIF(data) {
+		converted, convertErr := h.imageProcessor.TranscodeHEIF(ctx, data)
+		if convertErr != nil {
+			writeUploadError(w, r, http.StatusBadRequest, "unsupported_file_type", map[string]any{
+				"allowed_extensions": h.cfg.Upload.AllowedExtensions,
+			})
+			return
+		}
+		data = converted
+		filename = imageproc.JPEGFilename(filename)
+		contentType = "image/jpeg"
+	}
+	manifest, err := h.buildFileBundle(ctx, filename, data, contentType)
 	if err != nil {
 		writeUploadError(w, r, http.StatusInternalServerError, "upload_failed", nil)
 		return
@@ -310,7 +323,20 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			}
 
 			contentType := http.DetectContentType(data)
-			manifest, err := h.buildFileBundle(ctx, fileHeader.Filename, data, contentType)
+			filename := fileHeader.Filename
+			if imageproc.IsHEIF(data) {
+				converted, convertErr := h.imageProcessor.TranscodeHEIF(ctx, data)
+				if convertErr != nil {
+					mu.Lock()
+					failures = append(failures, uploadFailure{code: "unsupported_file_type", filename: fileHeader.Filename})
+					mu.Unlock()
+					return
+				}
+				data = converted
+				filename = imageproc.JPEGFilename(filename)
+				contentType = "image/jpeg"
+			}
+			manifest, err := h.buildFileBundle(ctx, filename, data, contentType)
 			if err != nil {
 				mu.Lock()
 				failures = append(failures, uploadFailure{code: "upload_failed", filename: fileHeader.Filename})

@@ -212,14 +212,21 @@ func Load() *Config {
 		},
 		Upload: UploadConfig{
 			MaxFileSize:       getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
-			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "jpeg", "webp", "pdf", "doc", "docx", "zip", "json", "html", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
+			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "jpeg", "webp", "heic", "heif", "pdf", "doc", "docx", "zip", "json", "html", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
 			AllowedMimeTypes: map[string]bool{
-				"image/png":          true,
-				"image/svg+xml":      true,
-				"image/jpeg":         true,
-				"image/webp":         true,
-				"application/pdf":    true,
-				"application/msword": true,
+				"image/png":     true,
+				"image/svg+xml": true,
+				"image/jpeg":    true,
+				"image/webp":    true,
+				// A phone shooting in "High Efficiency" uploads HEIC. It is
+				// converted to JPEG at ingest, so nothing downstream has to
+				// know the format.
+				"image/heic":          true,
+				"image/heif":          true,
+				"image/heic-sequence": true,
+				"image/heif-sequence": true,
+				"application/pdf":     true,
+				"application/msword":  true,
 				"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
 				"application/zip":           true,
 				"application/json":          true,
