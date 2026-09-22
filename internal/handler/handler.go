@@ -365,6 +365,7 @@ func (h *Handler) readManifest(ctx context.Context, cid string) (bundle.Manifest
 // HandleFile serves legacy CID-addressed file URLs. New browser-facing callers
 // use HandleFileLink so a protected asset CID never reaches the DOM.
 func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/file/"), "/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -397,6 +398,7 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 // HandleFileLink serves GET /file/link/{media_link}/{size}. The link ID is
 // opaque to the browser; file storage resolves its asset and policy internally.
 func (h *Handler) HandleFileLink(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/file/link/"), "/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Media link required"})

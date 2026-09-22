@@ -165,6 +165,7 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 
 // HandleStreamMaster обрабатывает GET /stream/{cid}/master.m3u8.
 func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	path := r.URL.Path
 	parts := strings.Split(strings.TrimPrefix(path, "/stream/"), "/")
 	if len(parts) < 2 {
@@ -204,6 +205,7 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 // The storage process resolves indexes against the protected master playlist
 // on each request, so a browser can neither learn nor reuse a backing CID.
 func (h *Handler) HandleStreamLink(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/stream/link/"), "/"), "/")
 	if len(parts) < 2 || parts[0] == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid media link stream URL"})
@@ -559,6 +561,7 @@ func (h *Handler) serveStreamMaster(w http.ResponseWriter, r *http.Request, cid 
 
 // HandleStreamSegment обрабатывает GET /stream/segment/{cid}.
 func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	path := strings.TrimPrefix(r.URL.Path, "/stream/segment/")
 
 	cid := path

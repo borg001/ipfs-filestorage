@@ -113,6 +113,9 @@ func TestFaceHiddenVideoDeniesAllStreamPaths(t *testing.T) {
 				if w.Code != want {
 					t.Fatalf("%s: got %d want %d: %s", path, w.Code, want, w.Body.String())
 				}
+				if w.Header().Get("Cache-Control") != "private, no-store" {
+					t.Fatal("stream denial must not be cached")
+				}
 				if path == "poster.jpg" && mode != "original" && w.Body.String() != "protected-poster" {
 					t.Fatal("original poster leaked")
 				}

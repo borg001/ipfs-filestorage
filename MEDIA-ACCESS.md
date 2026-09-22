@@ -36,3 +36,9 @@ cache entries if such a cache was enabled.
 
 This change fixes authorization using online policy decisions. It does not
 implement signed download grants or remove the API policy call per download.
+
+The stand check additionally covered actual private-photo bytes, verification
+owner/agency/staff, protected video posters, HLS master/variant/init/media segments,
+and direct-CID substitution. Denials also carry private/no-store headers.
+Before deployment, audit legacy raw avatar references as described by the API
+change: references to another profile's restricted library do not grant access.

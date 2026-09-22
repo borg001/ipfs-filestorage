@@ -73,6 +73,9 @@ func TestMediaAgainstRealPolicy(t *testing.T) {
 			if response.Code != tc.status {
 				t.Fatalf("got %d want %d: %s", response.Code, tc.status, response.Body.String())
 			}
+			if response.Header().Get("Cache-Control") != "private, no-store" {
+				t.Fatal("protected response must not be cached, including denials")
+			}
 			if tc.status == http.StatusOK {
 				if tc.body == "#EXTM3U" {
 					if !strings.HasPrefix(response.Body.String(), tc.body) {
@@ -80,9 +83,6 @@ func TestMediaAgainstRealPolicy(t *testing.T) {
 					}
 				} else if response.Body.String() != tc.body {
 					t.Fatalf("wrong bytes: %q", response.Body.String())
-				}
-				if response.Header().Get("Cache-Control") != "private, no-store" {
-					t.Fatal("protected bytes publicly cacheable")
 				}
 			} else if strings.Contains(response.Body.String(), "-original") {
 				t.Fatal("denial leaked original bytes")
