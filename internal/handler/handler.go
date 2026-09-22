@@ -388,7 +388,7 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 
 	decision, err := h.resolveMediaDelivery(r, cid)
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		writeMediaAccessError(w, err)
 		return
 	}
 	h.serveFile(w, r, cid, parts[1:], decision)
@@ -404,7 +404,7 @@ func (h *Handler) HandleFileLink(w http.ResponseWriter, r *http.Request) {
 	}
 	decision, err := h.resolveMediaDeliveryLink(r, parts[0])
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		writeMediaAccessError(w, err)
 		return
 	}
 	if err := validateCID(decision.SourceCID); err != nil {
