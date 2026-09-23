@@ -143,6 +143,7 @@ func mockHash(data []byte) string {
 
 // Создаёт тестовый handler с mock cluster
 func setupTestHandler(cfg *config.Config) *Handler {
+	cfg.MediaAccess.AllowUnmanaged = true
 	cluster := newMockCluster()
 	unpinStore, _ := store.NewUnpinStore("/tmp/test-unpin-store.json")
 	return &Handler{
