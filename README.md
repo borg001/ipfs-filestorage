@@ -757,7 +757,8 @@ Do not evict/delete state to reclaim cache space. Restore/rollback of state requ
 rotating epoch/keys before accepting traffic. All API writers must support mutation
 guards before enabling issuance. Key rotation: distribute new key to verifiers,
 switch issuer, keep old key for the maximum outstanding grant TTL (one hour).
-Query parameters contain secrets; exclude/redact query in reverse-proxy access logs.
+Bundled nginx logs paths without query/Referer. External reverse proxies must also
+exclude/redact query and Referer: they can contain session tokens and grants.
 The API `docs/media-grants.md` documents deployment, mutation coverage and recovery.
 
 The `internal/mediagrant` sources and tests are shared verbatim with API; update
