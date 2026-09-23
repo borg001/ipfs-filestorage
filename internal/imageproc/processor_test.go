@@ -188,6 +188,46 @@ func TestBlurFaceRegionsOnlyChangesFaceEllipse(t *testing.T) {
 	}
 }
 
+// The mask eases into the photo instead of ending on a hard line: along a
+// line out of the face the change from the source falls away step by step,
+// full over the face and nothing past the fade.
+func TestBlurFaceRegionsFadesAtTheEdge(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 160, 160))
+	for y := 0; y < 160; y++ {
+		for x := 0; x < 160; x++ {
+			value := uint8(0)
+			if (x/2+y/2)%2 == 0 {
+				value = 255
+			}
+			src.SetNRGBA(x, y, color.NRGBA{R: value, G: value, B: value, A: 255})
+		}
+	}
+	face := image.Rect(50, 50, 110, 110)
+	blurred := blurFaceRegions(src, []image.Rectangle{face}, 8)
+	// The ellipse's radius is 30px: solid to 24px, fading out by 39px.
+	centerY := 80
+	if faceMaskWeight(0.5) != 1 || faceMaskWeight(1.3) != 0 {
+		t.Fatal("the mask must be solid inside and gone at the fade")
+	}
+	if w := faceMaskWeight(1.05); w <= 0.1 || w >= 0.9 {
+		t.Fatalf("the mask must be part way at its edge, got %.2f", w)
+	}
+	previous := 2.0
+	for _, distance := range []float64{0.9, 1.0, 1.1, 1.2} {
+		w := faceMaskWeight(distance)
+		if w >= previous {
+			t.Fatalf("the mask must fall away outward: %.2f at %.1f after %.2f", w, distance, previous)
+		}
+		previous = w
+	}
+	if blurred.NRGBAAt(80+41, centerY) != src.NRGBAAt(80+41, centerY) {
+		t.Fatal("pixels past the fade must remain unchanged")
+	}
+	if blurred.NRGBAAt(80, 80) == src.NRGBAAt(80, 80) {
+		t.Fatal("face center was not blurred")
+	}
+}
+
 func variantsByKey(variants []Variant) map[string]Variant {
 	result := make(map[string]Variant, len(variants))
 	for _, variant := range variants {

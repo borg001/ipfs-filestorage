@@ -229,6 +229,17 @@ func (p *Processor) privacyVariants(ctx context.Context, src image.Image, output
 	}, nil
 }
 
+// A face mask is not cut out with a hard line: it is fully blurred over the
+// face and eases into the photo around it. The face rectangle already carries
+// padding (expandFaceRect), so the full blur still covers the face itself; the
+// soft band lies over that padding and a little beyond it.
+const (
+	// faceMaskSolid is where, in the ellipse's own radius, the full blur ends.
+	faceMaskSolid = 0.8
+	// faceMaskFade is where the blur has faded out into the photo.
+	faceMaskFade = 1.3
+)
+
 func blurFaceRegions(src *image.NRGBA, faces []image.Rectangle, minimumRadius int) *image.NRGBA {
 	dst := cloneNRGBA(src)
 	for _, face := range faces {
@@ -237,29 +248,72 @@ func blurFaceRegions(src *image.NRGBA, faces []image.Rectangle, minimumRadius in
 			continue
 		}
 		radius := max(minimumRadius, min(face.Dx(), face.Dy())/5)
-		region := image.NewNRGBA(image.Rect(0, 0, face.Dx(), face.Dy()))
-		draw.Draw(region, region.Bounds(), dst, face.Min, draw.Src)
+		// The blur is taken over the band as well, with room around it, so
+		// the fade blends real blurred pixels rather than the edge of a crop.
+		bandX := int(float64(face.Dx())/2*(faceMaskFade-1)) + 1
+		bandY := int(float64(face.Dy())/2*(faceMaskFade-1)) + 1
+		work := image.Rect(face.Min.X-bandX-radius, face.Min.Y-bandY-radius, face.Max.X+bandX+radius, face.Max.Y+bandY+radius).Intersect(src.Bounds())
+		region := image.NewNRGBA(image.Rect(0, 0, work.Dx(), work.Dy()))
+		draw.Draw(region, region.Bounds(), dst, work.Min, draw.Src)
 		blurred := blurNRGBA(region, radius)
-		applyEllipse(dst, blurred, face)
+		applySoftEllipse(dst, blurred, work.Min, face)
 	}
 	return dst
 }
 
-func applyEllipse(dst, blurred *image.NRGBA, face image.Rectangle) {
+// applySoftEllipse lays the blurred pixels over the face: in full inside the
+// solid part of the ellipse, fading smoothly to nothing at its outer edge.
+func applySoftEllipse(dst, blurred *image.NRGBA, origin image.Point, face image.Rectangle) {
 	centerX := float64(face.Min.X+face.Max.X-1) / 2
 	centerY := float64(face.Min.Y+face.Max.Y-1) / 2
 	radiusX := max(1.0, float64(face.Dx())/2)
 	radiusY := max(1.0, float64(face.Dy())/2)
-	for y := face.Min.Y; y < face.Max.Y; y++ {
-		for x := face.Min.X; x < face.Max.X; x++ {
+	area := image.Rect(
+		int(math.Floor(centerX-radiusX*faceMaskFade)), int(math.Floor(centerY-radiusY*faceMaskFade)),
+		int(math.Ceil(centerX+radiusX*faceMaskFade))+1, int(math.Ceil(centerY+radiusY*faceMaskFade))+1,
+	).Intersect(dst.Bounds()).Intersect(blurred.Bounds().Add(origin))
+	for y := area.Min.Y; y < area.Max.Y; y++ {
+		for x := area.Min.X; x < area.Max.X; x++ {
 			dx := (float64(x) - centerX) / radiusX
 			dy := (float64(y) - centerY) / radiusY
-			if dx*dx+dy*dy > 1 {
+			distance := math.Sqrt(dx*dx + dy*dy)
+			if distance >= faceMaskFade {
 				continue
 			}
-			dst.SetNRGBA(x, y, blurred.NRGBAAt(x-face.Min.X, y-face.Min.Y))
+			weight := faceMaskWeight(distance)
+			over := blurred.NRGBAAt(x-origin.X, y-origin.Y)
+			if weight >= 1 {
+				dst.SetNRGBA(x, y, over)
+				continue
+			}
+			under := dst.NRGBAAt(x, y)
+			dst.SetNRGBA(x, y, color.NRGBA{
+				R: blendChannel(under.R, over.R, weight),
+				G: blendChannel(under.G, over.G, weight),
+				B: blendChannel(under.B, over.B, weight),
+				A: blendChannel(under.A, over.A, weight),
+			})
 		}
 	}
+}
+
+// faceMaskWeight is how much of the blur a point takes at a distance from the
+// centre measured in the ellipse's radius: all of it in the solid part, none
+// at the fade, and a smooth step between the two with no visible line.
+func faceMaskWeight(distance float64) float64 {
+	if distance <= faceMaskSolid {
+		return 1
+	}
+	if distance >= faceMaskFade {
+		return 0
+	}
+	t := (faceMaskFade - distance) / (faceMaskFade - faceMaskSolid)
+	return t * t * (3 - 2*t)
+}
+
+func blendChannel(under, over uint8, weight float64) uint8 {
+	value := float64(under)*(1-weight) + float64(over)*weight
+	return uint8(math.Round(math.Max(0, math.Min(255, value))))
 }
 
 // blurNRGBA uses three box-blur passes to approximate a Gaussian blur in
