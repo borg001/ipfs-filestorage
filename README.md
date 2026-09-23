@@ -739,3 +739,28 @@ Docker-сети используют DNS-имена контейнеров (на
 ## Лицензия
 
 MIT
+
+## Media download grants (Stage B)
+
+Opt in with `MEDIA_GRANTS_ENABLED=true` and `MEDIA_GRANT_*` from `.env.example`.
+Keyring is a JSON object mapping key ID to a base64-encoded 32-byte AES key.
+API and storage must share keyring, audience, namespace and a **noeviction** Redis
+holding revocation state; preserve that state durably. Keep Lua session validation
+and legacy policy endpoints enabled. A valid grant replaces the per-download
+policy RPC, not session validation. Missing/revoked state fails closed. Invalid,
+expired, wrong-session, wrong-link and unauthorized-operation grants never fall
+back to CID or legacy policy. HLS child requests retain the grant.
+
+File deletion creates a permanent CID tombstone before unpin. Redis guards have
+no expiry: a crashed writer leaves its resource closed until controlled recovery.
+Do not evict/delete state to reclaim cache space. Restore/rollback of state requires
+rotating epoch/keys before accepting traffic. All API writers must support mutation
+guards before enabling issuance. Key rotation: distribute new key to verifiers,
+switch issuer, keep old key for the maximum outstanding grant TTL (one hour).
+Bundled nginx logs paths without query/Referer. External reverse proxies must also
+exclude/redact query and Referer: they can contain session tokens and grants.
+The API `docs/media-grants.md` documents deployment, mutation coverage and recovery.
+
+The `internal/mediagrant` sources and tests are shared verbatim with API; update
+both copies together. Run `go test -race ./internal/mediagrant ./internal/handler`;
+set `MEDIA_REDIS_TEST_URL` to an isolated Redis to include real revocation tests.

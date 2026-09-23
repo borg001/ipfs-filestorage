@@ -21,11 +21,17 @@ type Config struct {
 	Video       VideoConfig
 	Auth        AuthConfig
 	MediaAccess MediaAccessConfig
+	MediaGrants MediaGrantConfig
 	RateLimit   RateLimitConfig
 }
 
 type ServerConfig struct {
 	Port string
+}
+
+type MediaGrantConfig struct {
+	Enabled                                        bool
+	ActiveKey, Audience, Keys, RedisURL, Namespace string
 }
 
 type IPFSConfig struct {
@@ -302,6 +308,14 @@ func Load() *Config {
 			URL:            getEnv("MEDIA_ACCESS_URL", ""),
 			LinkURL:        getEnv("MEDIA_LINK_ACCESS_URL", ""),
 			TimeoutMs:      clampInt(getEnvInt("MEDIA_ACCESS_TIMEOUT_MS", 2500), 100, 30000),
+		},
+		MediaGrants: MediaGrantConfig{
+			Enabled:   getEnvBool("MEDIA_GRANTS_ENABLED", false),
+			ActiveKey: getEnv("MEDIA_GRANT_ACTIVE_KEY", ""),
+			Audience:  getEnv("MEDIA_GRANT_AUDIENCE", ""),
+			Keys:      getEnv("MEDIA_GRANT_KEYS", ""),
+			RedisURL:  getEnv("MEDIA_GRANT_REDIS_URL", ""),
+			Namespace: getEnv("MEDIA_GRANT_NAMESPACE", ""),
 		},
 		RateLimit: RateLimitConfig{
 			RPS:   getEnvFloat("RATE_LIMIT_RPS", 10),
