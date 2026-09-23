@@ -12,12 +12,21 @@ import (
 	"time"
 
 	"github.com/borg001/ipfs-filestorage/internal/config"
+	"github.com/borg001/ipfs-filestorage/internal/mediagrant"
 )
 
 var errMediaAccessDenied = errors.New("media access denied")
 
 func writeMediaAccessError(w http.ResponseWriter, err error) {
 	w.Header().Set("Cache-Control", "private, no-store")
+	if errors.Is(err, mediagrant.ErrExpired) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "MEDIA_GRANT_EXPIRED", "error": "Media grant expired"})
+		return
+	}
+	if errors.Is(err, mediagrant.ErrInvalid) || errors.Is(err, mediagrant.ErrRevoked) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"code": "MEDIA_GRANT_DENIED", "error": "Media grant denied"})
+		return
+	}
 	if errors.Is(err, errMediaAccessDenied) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Media access denied"})
 		return
@@ -247,6 +256,11 @@ func forwardMediaAuthorization(target *http.Request, source *http.Request) {
 }
 
 func (h *Handler) resolveMediaDelivery(r *http.Request, cid string) (mediaDeliveryDecision, error) {
+	// Grants never authorize a legacy CID route. It cannot be used to smuggle
+	// a child file or a different resource past the immutable link contract.
+	if r.URL.Query().Has("grant") {
+		return mediaDeliveryDecision{}, mediagrant.ErrInvalid
+	}
 	if h.mediaAccess == nil {
 		if h.cfg != nil && h.cfg.MediaAccess.AllowUnmanaged && h.cfg.MediaAccess.URL == "" && h.cfg.MediaAccess.LinkURL == "" {
 			return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
@@ -266,6 +280,9 @@ func (h *Handler) resolveMediaDelivery(r *http.Request, cid string) (mediaDelive
 }
 
 func (h *Handler) resolveMediaDeliveryLink(r *http.Request, mediaLink string) (mediaDeliveryDecision, error) {
+	if r.URL.Query().Has("grant") {
+		return h.mediaGrants.resolve(r, mediaLink)
+	}
 	if h.mediaAccess == nil {
 		return mediaDeliveryDecision{}, fmt.Errorf("media access resolver is not configured")
 	}

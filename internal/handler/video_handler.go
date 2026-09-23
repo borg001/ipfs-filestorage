@@ -685,6 +685,9 @@ func bindStreamRoot(r *http.Request, decision mediaDeliveryDecision) {
 
 func playlistAuthSuffix(query url.Values) string {
 	values := url.Values{}
+	if grant := query.Get("grant"); grant != "" {
+		values.Set("grant", grant)
+	}
 	if root := query.Get("media_root"); root != "" {
 		values.Set("media_root", root)
 	}
