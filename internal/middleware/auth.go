@@ -13,6 +13,10 @@ type contextKey string
 
 const contextKeyUserID contextKey = "user_id"
 
+// mediaTokenCookie is the cookie the web app keeps the session in for the
+// storage path.
+const mediaTokenCookie = "iamfree_media_token"
+
 // AuthMiddleware checks request authentication:
 // 1. Static API keys from API_KEYS env (always, default)
 // 2. Lua authorize() script if AUTH_LUA_SCRIPT is set (fallback)
@@ -29,6 +33,16 @@ func AuthMiddleware(apiKeys []string, luaProvider *lua.Provider) func(http.Handl
 			if r.Method == http.MethodGet && r.URL.Path == "/config" {
 				next.ServeHTTP(w, r)
 				return
+			}
+
+			// The web app hands pictures their session through a cookie scoped
+			// to the storage path: a token in the address landed in access logs
+			// and in every copied image link. It is read as the Authorization
+			// header, so every check below and the access resolver see it.
+			if r.Header.Get("Authorization") == "" {
+				if cookie, err := r.Cookie(mediaTokenCookie); err == nil && strings.TrimSpace(cookie.Value) != "" {
+					r.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cookie.Value))
+				}
 			}
 
 			// Extract token from Authorization, X-API-Key, or query string.

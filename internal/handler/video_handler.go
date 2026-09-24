@@ -580,10 +580,41 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected poster is unavailable"})
 			return
 		}
-		cid = decision.ReplacementCID
+		h.serveProtectedPoster(w, r, decision.ReplacementCID, path, decision)
+		return
 	}
 
 	h.serveStreamAsset(w, r, cid, path, decision)
+}
+
+// serveProtectedPoster serves the covered picture a viewer is allowed. A
+// replacement that is a bundle is read through its variant for the decision,
+// never through the fallback that reads a bundle's original file.
+func (h *Handler) serveProtectedPoster(w http.ResponseWriter, r *http.Request, cid, path string, decision mediaDeliveryDecision) {
+	ctx := r.Context()
+	reader, err := h.cluster.ClusterTryFetch(ctx, cid)
+	if err != nil {
+		manifest, manifestErr := h.readManifest(ctx, cid)
+		if manifestErr != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected poster is unavailable"})
+			return
+		}
+		variant, ok := manifest.Variants[string(decision.Mode)]
+		if !ok || variant.BundlePath == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected poster is unavailable"})
+			return
+		}
+		if reader, err = h.cluster.ClusterTryFetchPath(ctx, cid, variant.BundlePath); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Segment not found"})
+			return
+		}
+	}
+	defer reader.Close()
+	w.Header().Set("Content-Type", streamSegmentContentType(path))
+	setUserFileHeaders(w, streamSegmentContentType(path))
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, reader)
 }
 
 func (h *Handler) serveStreamAsset(w http.ResponseWriter, r *http.Request, cid, path string, decision mediaDeliveryDecision) {
@@ -598,6 +629,7 @@ func (h *Handler) serveStreamAsset(w http.ResponseWriter, r *http.Request, cid, 
 	contentType := streamSegmentContentType(path)
 
 	w.Header().Set("Content-Type", contentType)
+	setUserFileHeaders(w, contentType)
 	if decision.Managed {
 		w.Header().Set("Cache-Control", "private, no-store")
 	} else {

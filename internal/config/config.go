@@ -209,12 +209,13 @@ func Load() *Config {
 		API: APIConfig{
 			Keys: getEnvSlice("API_KEYS", []string{}),
 		},
+		// No HTML or SVG: storage is served from the app's origin, and such a
+		// file runs script there.
 		Upload: UploadConfig{
 			MaxFileSize:       getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
-			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "jpeg", "webp", "heic", "heif", "pdf", "doc", "docx", "zip", "json", "html", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
+			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "jpg", "jpeg", "webp", "heic", "heif", "pdf", "doc", "docx", "zip", "json", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
 			AllowedMimeTypes: map[string]bool{
 				"image/png":     true,
-				"image/svg+xml": true,
 				"image/jpeg":    true,
 				"image/webp":    true,
 				// A phone shooting in "High Efficiency" uploads HEIC. It is
@@ -230,7 +231,6 @@ func Load() *Config {
 				"application/zip":           true,
 				"application/json":          true,
 				"application/octet-stream":  true,
-				"text/html":                 true,
 				"text/plain":                true,
 				"text/plain; charset=utf-8": true,
 				"video/mp4":                 true,

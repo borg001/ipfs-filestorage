@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/imageproc"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
+	"github.com/borg001/ipfs-filestorage/internal/middleware"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 	"github.com/borg001/ipfs-filestorage/internal/unpin"
 )
@@ -164,15 +166,20 @@ func (h *Handler) buildFileBundle(ctx context.Context, filename string, data []b
 }
 
 // validateCID checks that a string looks like a valid IPFS CID.
+// cidV0Pattern and cidV1Pattern accept a CID and nothing after it. Checking
+// only the prefix and the length let "Qm…/original" through as a CID: the
+// access check did not know such a CID and allowed it, and the cluster read
+// the original file out of a private photo's bundle.
+var (
+	cidV0Pattern = regexp.MustCompile(`^Qm[A-Za-z0-9]{44}$`)
+	cidV1Pattern = regexp.MustCompile(`^baf[a-z0-9]{50,}$`)
+)
+
 func validateCID(cid string) error {
 	if cid == "" {
 		return fmt.Errorf("CID required")
 	}
-	// Accept Qm... (CIDv0) and bafy.../bafk... (CIDv1)
-	if strings.HasPrefix(cid, "Qm") && len(cid) >= 46 {
-		return nil
-	}
-	if (strings.HasPrefix(cid, "bafy") || strings.HasPrefix(cid, "bafk")) && len(cid) >= 50 {
+	if cidV0Pattern.MatchString(cid) || cidV1Pattern.MatchString(cid) {
 		return nil
 	}
 	return fmt.Errorf("invalid CID format")
@@ -503,13 +510,43 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	}
 
 	w.Header().Set("Content-Type", contentType)
+	setUserFileHeaders(w, contentType)
 	w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, buffered)
 }
 
+// setUserFileHeaders keeps a file anyone uploaded from acting as a page of
+// the app. Storage is served from the app's own origin, and an uploaded HTML
+// or SVG file ran its script there, next to the session token. No script runs
+// in any stored file, and only pictures, video and sound open in place;
+// everything else is downloaded.
+func setUserFileHeaders(w http.ResponseWriter, contentType string) {
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !inlineSafeContentType(contentType) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment")
+	}
+}
+
+func inlineSafeContentType(contentType string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	switch mediaType {
+	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic", "image/heif", "text/plain":
+		return true
+	}
+	return strings.HasPrefix(mediaType, "video/") || strings.HasPrefix(mediaType, "audio/") || mediaType == "application/vnd.apple.mpegurl"
+}
+
 // HandleDelete обрабатывает DELETE /file/{cid}.
 func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	// Files are taken down by the platform, never by a signed-in person: any
+	// session could unpin any CID it had seen, and CIDs travel in every page.
+	if middleware.UserIDFromContext(r.Context()) != "api-key" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Deleting files is not allowed"})
+		return
+	}
 	cid := strings.TrimPrefix(r.URL.Path, "/file/")
 	if err := validateCID(cid); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
