@@ -181,7 +181,7 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	decision, err := h.resolveMediaDelivery(r, cid)
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		writeMediaResolveError(w, err)
 		return
 	}
 	if decision.Mode == mediaDeliveryBlur {
@@ -567,7 +567,7 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	decision, err := h.resolveMediaDelivery(r, cid)
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		writeMediaResolveError(w, err)
 		return
 	}
 	isPoster := strings.EqualFold(filepath.Ext(path), ".jpg") || strings.EqualFold(filepath.Ext(path), ".jpeg") || strings.EqualFold(filepath.Ext(path), ".webp") || strings.EqualFold(filepath.Ext(path), ".png")

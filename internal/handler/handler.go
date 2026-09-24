@@ -262,8 +262,16 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, responseFromManifest(manifest, true))
 }
 
+// maxFilesPerUpload bounds one multi-file upload.
+const maxFilesPerUpload = 20
+
 // HandleUploadMultiple обрабатывает POST /upload-multiple.
 func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
+	// One request carries at most maxFilesPerUpload files of the allowed size:
+	// the body was unbounded and every file got a goroutine of its own.
+	if h.cfg != nil && h.cfg.Upload.MaxFileSize > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, h.cfg.Upload.MaxFileSize*maxFilesPerUpload+(1<<20))
+	}
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
 		return
@@ -271,6 +279,10 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	files := r.MultipartForm.File["files"]
 	if len(files) == 0 {
 		writeUploadError(w, r, http.StatusBadRequest, "upload_missing_file", nil)
+		return
+	}
+	if len(files) > maxFilesPerUpload {
+		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
 		return
 	}
 
@@ -421,7 +433,7 @@ func (h *Handler) HandleFile(w http.ResponseWriter, r *http.Request) {
 
 	decision, err := h.resolveMediaDelivery(r, cid)
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		writeMediaResolveError(w, err)
 		return
 	}
 	h.serveFile(w, r, cid, parts[1:], decision)
