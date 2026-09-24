@@ -83,9 +83,19 @@ func (v *Validator) Validate(ctx context.Context, inputPath string, fileSize int
 	if info.Duration > float64(v.cfg.MaxDurationSec) {
 		return &ValidationError{Code: "video_duration_exceeded", MaxDurationSec: v.cfg.MaxDurationSec}
 	}
+	// A frame larger than 4K or faster than 120 fps costs a transcode far
+	// beyond what a phone records.
+	if info.Width > maxVideoSide || info.Height > maxVideoSide || info.FrameRate > maxVideoFrameRate {
+		return &ValidationError{Code: "video_resolution_exceeded"}
+	}
 
 	return nil
 }
+
+const (
+	maxVideoSide      = 4096
+	maxVideoFrameRate = 120
+)
 
 // Probe получает метаданные видео через ffprobe.
 func (v *Validator) Probe(ctx context.Context, inputPath string) (*VideoInfo, error) {

@@ -95,6 +95,10 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !h.uploads.take(uploadSessionKey(r), limitedReader.bytesRead) {
+		writeUploadError(w, r, http.StatusTooManyRequests, "upload_quota_exceeded", nil)
+		return
+	}
 
 	ctx := r.Context()
 
@@ -125,8 +129,18 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(outputDir)
 
+	// Videos queue for a transcoding slot, and a transcode that runs past its
+	// time is stopped instead of holding the slot for good.
+	release, err := acquireTranscodeSlot(ctx)
+	if err != nil {
+		writeUploadError(w, r, http.StatusServiceUnavailable, "upload_busy", nil)
+		return
+	}
+	defer release()
+	transcodeCtx, cancelTranscode := context.WithTimeout(ctx, transcodeTimeout)
+	defer cancelTranscode()
 	transcoder := video.NewTranscoder(&h.cfg.Video)
-	result, err := transcoder.Transcode(ctx, tmpInput.Name(), outputDir)
+	result, err := transcoder.Transcode(transcodeCtx, tmpInput.Name(), outputDir)
 	if err != nil {
 		writeUploadError(w, r, http.StatusInternalServerError, "upload_failed", nil)
 		return

@@ -44,6 +44,7 @@ type Handler struct {
 	unpinWorker    *unpin.Worker
 	imageProcessor *imageproc.Processor
 	mediaAccess    *mediaAccessResolver
+	uploads        *uploadBudget
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -64,6 +65,7 @@ func NewHandler(cfg *config.Config) *Handler {
 		unpinStore:     unpinStore,
 		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
 		mediaAccess:    newMediaAccessResolver(cfg.MediaAccess),
+		uploads:        newUploadBudget(cfg.Upload.DailyBytesPerSession),
 	}
 
 	// Запускаем TTL worker
@@ -122,6 +124,9 @@ func formatFromFilename(filename string) string {
 }
 
 func (h *Handler) buildFileBundle(ctx context.Context, filename string, data []byte, contentType string) (bundle.Manifest, error) {
+	// The original is served as uploaded, so what a photo says about where it
+	// was taken is taken out first.
+	data = imageproc.StripMetadata(data)
 	manifest := bundle.NewFileManifest(filename, contentType, formatFromFilename(filename), int64(len(data)))
 	entries := map[string][]byte{
 		bundle.OriginalFilename: data,
@@ -236,6 +241,10 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !h.uploads.take(uploadSessionKey(r), limitedReader.bytesRead) {
+		writeUploadError(w, r, http.StatusTooManyRequests, "upload_quota_exceeded", nil)
+		return
+	}
 
 	ctx := r.Context()
 	contentType := http.DetectContentType(data)
@@ -283,6 +292,14 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(files) > maxFilesPerUpload {
 		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
+		return
+	}
+	var batchBytes int64
+	for _, fh := range files {
+		batchBytes += fh.Size
+	}
+	if !h.uploads.take(uploadSessionKey(r), batchBytes) {
+		writeUploadError(w, r, http.StatusTooManyRequests, "upload_quota_exceeded", nil)
 		return
 	}
 

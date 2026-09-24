@@ -52,6 +52,12 @@ func localizedUploadMessage(locale, code string, details map[string]any) string 
 			return "Не удалось обработать форму загрузки. Повторите попытку."
 		case "upload_storage_unavailable":
 			return "Хранилище временно недоступно. Повторите попытку позже."
+		case "upload_quota_exceeded":
+			return "Лимит загрузок на сегодня исчерпан. Попробуйте завтра."
+		case "upload_busy":
+			return "Сейчас обрабатывается много видео. Повторите загрузку через несколько минут."
+		case "video_resolution_exceeded":
+			return "Разрешение видео слишком большое: не больше 4096 точек по стороне и 120 кадров в секунду."
 		default:
 			return "Не удалось загрузить файл. Повторите попытку."
 		}
@@ -72,6 +78,12 @@ func localizedUploadMessage(locale, code string, details map[string]any) string 
 		return "The upload form could not be processed. Try again."
 	case "upload_storage_unavailable":
 		return "Storage is temporarily unavailable. Try again later."
+	case "upload_quota_exceeded":
+		return "Today's upload limit is used up. Try again tomorrow."
+	case "upload_busy":
+		return "Many videos are being processed. Try the upload again in a few minutes."
+	case "video_resolution_exceeded":
+		return "The video resolution is too high: at most 4096 pixels a side and 120 frames per second."
 	default:
 		return "The file could not be uploaded. Try again."
 	}
