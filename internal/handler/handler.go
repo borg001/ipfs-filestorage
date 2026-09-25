@@ -38,13 +38,16 @@ type Response struct {
 
 // Handler содержит HTTP-хендлеры сервиса.
 type Handler struct {
-	cfg            *config.Config
-	cluster        ipfs.Clusterer
-	unpinStore     *store.UnpinStore
-	unpinWorker    *unpin.Worker
-	imageProcessor *imageproc.Processor
-	mediaAccess    *mediaAccessResolver
-	uploads        *uploadBudget
+	cfg         *config.Config
+	cluster     ipfs.Clusterer
+	unpinStore  *store.UnpinStore
+	unpinWorker *unpin.Worker
+	// variantOverrides serves variants drawn again after upload, such as a
+	// face mask redrawn with soft edges, in place of the bundled ones.
+	variantOverrides *store.VariantOverrides
+	imageProcessor   *imageproc.Processor
+	mediaAccess      *mediaAccessResolver
+	uploads          *uploadBudget
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -59,13 +62,20 @@ func NewHandler(cfg *config.Config) *Handler {
 		unpinStore, _ = store.NewUnpinStore("/tmp/unpin-store.json")
 	}
 
+	// Kept beside the unpin list, on each instance's own data volume.
+	variantOverrides, err := store.NewVariantOverrides(filepath.Join(filepath.Dir(cfg.Unpin.StorePath), "variant-overrides.json"))
+	if err != nil {
+		log.Printf("[STORAGE] variant overrides unavailable: %v", err)
+	}
+
 	h := &Handler{
-		cfg:            cfg,
-		cluster:        cluster,
-		unpinStore:     unpinStore,
-		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
-		mediaAccess:    newMediaAccessResolver(cfg.MediaAccess),
-		uploads:        newUploadBudget(cfg.Upload.DailyBytesPerSession),
+		cfg:              cfg,
+		cluster:          cluster,
+		unpinStore:       unpinStore,
+		variantOverrides: variantOverrides,
+		imageProcessor:   imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
+		mediaAccess:      newMediaAccessResolver(cfg.MediaAccess),
+		uploads:          newUploadBudget(cfg.Upload.DailyBytesPerSession),
 	}
 
 	// Запускаем TTL worker
@@ -508,6 +518,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	if decision.Managed && decision.Mode != mediaDeliveryOriginal {
 		variantKey = string(decision.Mode)
 	}
+	replacement := ""
 	if variantKey != "" {
 		variant, ok := manifest.Variants[variantKey]
 		if !ok {
@@ -516,12 +527,21 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		}
 		bundlePath = variant.BundlePath
 		contentType = variant.ContentType
+		replacement, _ = h.variantOverrides.Get(store.VariantOverrideKey(cid, variantKey))
 	} else if len(parts) > 1 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}
 
-	reader, err := h.cluster.ClusterTryFetchPath(ctx, cid, bundlePath)
+	// A variant drawn again after upload is served in place of the bundled
+	// one; if its file cannot be read, the bundled one still can.
+	var reader io.ReadCloser
+	if replacement != "" {
+		reader, err = h.cluster.ClusterTryFetch(ctx, replacement)
+	}
+	if replacement == "" || err != nil {
+		reader, err = h.cluster.ClusterTryFetchPath(ctx, cid, bundlePath)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return

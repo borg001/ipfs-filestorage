@@ -53,6 +53,7 @@ func main() {
 	mux.HandleFunc("GET /file/link/", handlers.HandleFileLink)
 	mux.HandleFunc("GET /file/", handlers.HandleFile)
 	mux.HandleFunc("DELETE /file/", handlers.HandleDelete)
+	mux.HandleFunc("POST /admin/face-masks/refresh", handlers.HandleRefreshFaceMasks)
 	mux.HandleFunc("GET /config", handlers.HandleConfig)
 
 	// Video streaming handlers

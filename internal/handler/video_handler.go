@@ -231,7 +231,7 @@ func (h *Handler) HandleStreamLink(w http.ResponseWriter, r *http.Request) {
 		// poster is the safe visual replacement used by cards and stories.
 		posterCID := decision.PosterCID
 		if decision.ReplacementCID != "" {
-			posterCID = decision.ReplacementCID
+			posterCID = h.overriddenFile(decision.ReplacementCID)
 		}
 		if err := validateCID(posterCID); err != nil || h.unpinStore.Has(posterCID) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Poster not found"})
@@ -606,7 +606,10 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 // never through the fallback that reads a bundle's original file.
 func (h *Handler) serveProtectedPoster(w http.ResponseWriter, r *http.Request, cid, path string, decision mediaDeliveryDecision) {
 	ctx := r.Context()
-	reader, err := h.cluster.ClusterTryFetch(ctx, cid)
+	reader, err := h.cluster.ClusterTryFetch(ctx, h.overriddenFile(cid))
+	if err != nil {
+		reader, err = h.cluster.ClusterTryFetch(ctx, cid)
+	}
 	if err != nil {
 		manifest, manifestErr := h.readManifest(ctx, cid)
 		if manifestErr != nil {
