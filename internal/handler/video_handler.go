@@ -198,11 +198,27 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 		writeMediaResolveError(w, err)
 		return
 	}
-	if decision.Mode == mediaDeliveryBlur {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
+	if mediaDeliveryHidesStream(decision.Mode) {
+		writeStreamHidden(w, decision.Mode)
 		return
 	}
 	h.serveStreamMaster(w, r, cid, decision, "")
+}
+
+// mediaDeliveryHidesStream says a video is not played to this viewer, only
+// its poster shown. A private video is blurred for him; a video whose face is
+// hidden cannot be masked frame by frame, and its stream showed the face its
+// masked poster hid.
+func mediaDeliveryHidesStream(mode mediaDeliveryMode) bool {
+	return mode == mediaDeliveryBlur || mode == mediaDeliveryBlurFaces
+}
+
+func writeStreamHidden(w http.ResponseWriter, mode mediaDeliveryMode) {
+	if mode == mediaDeliveryBlurFaces {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Video with a hidden face is unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
 }
 
 // HandleStreamLink serves opaque browser URLs. Every HLS level is addressed by
@@ -238,8 +254,8 @@ func (h *Handler) HandleStreamLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.serveStreamAsset(w, r, posterCID, "poster.jpg", decision)
-	case decision.Mode == mediaDeliveryBlur:
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
+	case mediaDeliveryHidesStream(decision.Mode):
+		writeStreamHidden(w, decision.Mode)
 		return
 	case len(parts) == 2 && parts[1] == "master.m3u8":
 		h.serveLinkedStreamMaster(w, r, decision)
@@ -585,8 +601,8 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isPoster := strings.EqualFold(filepath.Ext(path), ".jpg") || strings.EqualFold(filepath.Ext(path), ".jpeg") || strings.EqualFold(filepath.Ext(path), ".webp") || strings.EqualFold(filepath.Ext(path), ".png")
-	if decision.Mode == mediaDeliveryBlur && !isPoster {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
+	if mediaDeliveryHidesStream(decision.Mode) && !isPoster {
+		writeStreamHidden(w, decision.Mode)
 		return
 	}
 	if isPoster && decision.Mode != mediaDeliveryOriginal {
