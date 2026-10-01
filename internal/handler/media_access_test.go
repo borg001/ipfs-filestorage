@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,16 @@ import (
 
 func policyServer(t *testing.T, expectedCID string, rows []map[string]interface{}) *httptest.Server {
 	t.Helper()
+	for _, row := range rows {
+		if _, ok := row["storage_uri"]; !ok {
+			row["storage_uri"] = "ipfs://" + expectedCID
+		}
+		if metadata, ok := responseMap(row["metadata"]); ok {
+			if aliases, ok := responseMap(metadata["poster_aliases"]); ok && aliases[expectedCID] != nil {
+				row["poster_uri"] = "ipfs://" + expectedCID
+			}
+		}
+	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("search"); got != expectedCID {
 			t.Errorf("policy search = %q, want %q", got, expectedCID)
@@ -77,13 +88,11 @@ func TestMediaPolicyForwardsGalleryLinkContext(t *testing.T) {
 
 	resolver := newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
 	request := httptest.NewRequest(http.MethodGet, "/file/"+testCID("LinkContext")+"/320x320?media_link=55", nil)
-	decision, err := resolver.Resolve(request.Context(), request, testCID("LinkContext"))
-	if err != nil {
-		t.Fatal(err)
+	_, err := resolver.Resolve(request.Context(), request, testCID("LinkContext"))
+	if !errors.Is(err, errMediaAccessDenied) {
+		t.Fatalf("empty policy must deny: %v", err)
 	}
-	if decision.Managed {
-		t.Fatal("empty policy response must keep ordinary media unmanaged")
-	}
+
 }
 
 func TestMediaPolicyResolvesOpaqueLinkWithoutCIDInBrowserRequest(t *testing.T) {
@@ -244,18 +253,19 @@ func TestVideoPolicyProtectsMasterSegmentsAndPosters(t *testing.T) {
 			w := httptest.NewRecorder()
 			target.handle(w, httptest.NewRequest(http.MethodGet, target.path, nil))
 			policy.Close()
-			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "hidden face") {
+			// A segment asked for by its own CID is refused before its mode
+			// is read: it is bound to no resource the policy answered for.
+			if w.Code != http.StatusForbidden || (target.cid == testMasterCID && !strings.Contains(w.Body.String(), "hidden face")) {
 				t.Fatalf("%s status = %d %s, want 403 for a hidden face", target.path, w.Code, w.Body.String())
 			}
 		}
 
+		// The masked poster is the one the video's master binds to the mode,
+		// not one named by editable metadata.
+		cluster.files[testMasterCID] = []byte(testVideoMasterPosters(testPosterCID, maskedPosterCID))
 		policy := policyServer(t, testPosterCID, []map[string]interface{}{{
+			"storage_uri": "video://" + testMasterCID, "poster_uri": "ipfs://" + testPosterCID,
 			"delivery_mode": "blur_faces",
-			"metadata": map[string]interface{}{
-				"poster_aliases": map[string]interface{}{
-					testPosterCID: map[string]interface{}{"blur_faces": maskedPosterCID},
-				},
-			},
 		}})
 		defer policy.Close()
 		h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
@@ -272,7 +282,9 @@ func TestVideoPolicyProtectsMasterSegmentsAndPosters(t *testing.T) {
 		blurPosterCID := testCID("BlurPoster")
 		cluster.files[testPosterCID] = []byte("original-poster")
 		cluster.files[blurPosterCID] = []byte("blurred-poster")
+		cluster.files[testMasterCID] = []byte(testVideoMasterPosters(testPosterCID, blurPosterCID))
 		policy := policyServer(t, testPosterCID, []map[string]interface{}{{
+			"storage_uri": "video://" + testMasterCID, "poster_uri": "ipfs://" + testPosterCID,
 			"delivery_mode": "blur",
 			"metadata": map[string]interface{}{
 				"poster_aliases": map[string]interface{}{

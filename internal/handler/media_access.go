@@ -14,6 +14,17 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/config"
 )
 
+var errMediaAccessDenied = errors.New("media access denied")
+
+func writeMediaAccessError(w http.ResponseWriter, err error) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	if errors.Is(err, errMediaAccessDenied) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Media access denied"})
+		return
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+}
+
 type mediaDeliveryMode string
 
 const (
@@ -25,9 +36,9 @@ const (
 	mediaDeliveryDeny mediaDeliveryMode = "deny"
 )
 
-// errMediaForbidden is a refusal by the policy, answered 403 rather than as
-// an outage.
-var errMediaForbidden = errors.New("media access denied")
+// errMediaForbidden is a refusal by the policy - a placed file reachable
+// through none of its places - answered 403 like every other denial.
+var errMediaForbidden = errMediaAccessDenied
 
 type mediaAccessResolver struct {
 	cidEndpoint  *url.URL
@@ -36,11 +47,11 @@ type mediaAccessResolver struct {
 }
 
 type mediaDeliveryDecision struct {
-	Mode           mediaDeliveryMode
-	Managed        bool
-	ReplacementCID string
-	SourceCID      string
-	PosterCID      string
+	Mode          mediaDeliveryMode
+	Managed       bool
+	SourceCID     string
+	SourceIsVideo bool
+	PosterCID     string
 }
 
 func newMediaAccessResolver(cfg config.MediaAccessConfig) *mediaAccessResolver {
@@ -62,9 +73,10 @@ func newMediaAccessResolver(cfg config.MediaAccessConfig) *mediaAccessResolver {
 	return &mediaAccessResolver{cidEndpoint: cidEndpoint, linkEndpoint: linkEndpoint, client: &http.Client{Timeout: timeout}}
 }
 
-// Resolve returns managed=false for files placed nowhere (chat attachments),
-// the policy's answer for a placed file, and errMediaForbidden when the viewer
-// may reach none of its places.
+// Resolve requires an explicit policy for every resource, including
+// attachments: an empty response is a denial, never evidence that a resource
+// is public. The policy's answer for a placed file comes back as it is, and
+// errMediaForbidden when the viewer may reach none of its places.
 //
 // A media_link in the query speaks only for its own file. The decision used
 // to be taken for the link and applied to whatever CID the path named, so a
@@ -100,14 +112,14 @@ func (r *mediaAccessResolver) ResolveLink(ctx context.Context, source *http.Requ
 		return mediaDeliveryDecision{}, err
 	}
 	if !decision.Managed || decision.SourceCID == "" {
-		return mediaDeliveryDecision{}, fmt.Errorf("media link is unavailable")
+		return mediaDeliveryDecision{}, errMediaAccessDenied
 	}
 	return decision, nil
 }
 
 func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request, cid, requestedMediaLink string) (mediaDeliveryDecision, error) {
 	if r == nil {
-		return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
+		return mediaDeliveryDecision{}, fmt.Errorf("media policy is not configured")
 	}
 	endpoint := *r.cidEndpoint
 	query := endpoint.Query()
@@ -125,7 +137,11 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 		query.Del("media_link")
 	} else {
 		if cid != "" {
-			query.Set("search", cid)
+			searchCID := cid
+			if source != nil && source.URL.Query().Get("media_root") != "" {
+				searchCID = source.URL.Query().Get("media_root")
+			}
+			query.Set("search", searchCID)
 		}
 		query.Set("size", "2")
 	}
@@ -142,6 +158,19 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 		return mediaDeliveryDecision{}, fmt.Errorf("request media policy: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusUnauthorized {
+		return mediaDeliveryDecision{}, errMediaAccessDenied
+	}
+	// The current generator View encodes an absent/filtered record as 400.
+	// Only this exact domain error is a denial; SQL/transport errors remain 503.
+	if response.StatusCode == http.StatusBadRequest {
+		var failure struct {
+			Message string `json:"message"`
+		}
+		if json.NewDecoder(io.LimitReader(response.Body, 8192)).Decode(&failure) == nil && failure.Message == "Record not found" {
+			return mediaDeliveryDecision{}, errMediaAccessDenied
+		}
+	}
 	if response.StatusCode != http.StatusOK {
 		return mediaDeliveryDecision{}, fmt.Errorf("media policy returned HTTP %d", response.StatusCode)
 	}
@@ -157,7 +186,7 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 		payload.Rows = []map[string]interface{}{payload.Item}
 	}
 	if len(payload.Rows) == 0 {
-		return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
+		return mediaDeliveryDecision{}, errMediaAccessDenied
 	}
 
 	decision := mediaDeliveryDecision{Mode: mediaDeliveryOriginal, Managed: true}
@@ -181,26 +210,13 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 		default:
 			return mediaDeliveryDecision{}, fmt.Errorf("media policy returned unsupported mode %q", candidate)
 		}
-		if replacement := mediaPosterReplacement(row["metadata"], cid, mediaDeliveryMode(candidate)); replacement != "" && decision.Mode != mediaDeliveryOriginal {
-			decision.ReplacementCID = replacement
-		}
 		if decision.SourceCID == "" {
 			decision.SourceCID = mediaStorageCID(row["storage_uri"])
+			sourceURI, _ := responseString(row["storage_uri"])
+			decision.SourceIsVideo = strings.HasPrefix(sourceURI, "video://")
 		}
 		if decision.PosterCID == "" {
 			decision.PosterCID = mediaStorageCID(row["poster_uri"])
-		}
-	}
-	if decision.Mode != mediaDeliveryOriginal {
-		for _, row := range payload.Rows {
-			posterCID := decision.PosterCID
-			if posterCID == "" {
-				posterCID = cid
-			}
-			if replacement := mediaPosterReplacement(row["metadata"], posterCID, decision.Mode); replacement != "" {
-				decision.ReplacementCID = replacement
-				break
-			}
 		}
 	}
 	return decision, nil
@@ -217,23 +233,6 @@ func mediaStorageCID(value interface{}) string {
 		}
 	}
 	return ""
-}
-
-func mediaPosterReplacement(value interface{}, originalCID string, mode mediaDeliveryMode) string {
-	metadata, ok := responseMap(value)
-	if !ok {
-		return ""
-	}
-	aliases, ok := responseMap(metadata["poster_aliases"])
-	if !ok {
-		return ""
-	}
-	values, ok := responseMap(aliases[originalCID])
-	if !ok {
-		return ""
-	}
-	replacement, _ := responseString(values[string(mode)])
-	return replacement
 }
 
 func responseMap(value interface{}) (map[string]interface{}, bool) {
@@ -282,9 +281,21 @@ func forwardMediaAuthorization(target *http.Request, source *http.Request) {
 
 func (h *Handler) resolveMediaDelivery(r *http.Request, cid string) (mediaDeliveryDecision, error) {
 	if h.mediaAccess == nil {
-		return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
+		if h.cfg != nil && h.cfg.MediaAccess.AllowUnmanaged && h.cfg.MediaAccess.URL == "" && h.cfg.MediaAccess.LinkURL == "" {
+			return mediaDeliveryDecision{Mode: mediaDeliveryOriginal}, nil
+		}
+		return mediaDeliveryDecision{}, fmt.Errorf("media policy is not configured")
 	}
-	return h.mediaAccess.Resolve(r.Context(), r, cid)
+	decision, err := h.mediaAccess.Resolve(r.Context(), r, cid)
+	if err != nil {
+		return mediaDeliveryDecision{}, err
+	}
+	if decision.Managed {
+		if err := h.validateMediaResource(r, cid, decision); err != nil {
+			return mediaDeliveryDecision{}, err
+		}
+	}
+	return decision, nil
 }
 
 func (h *Handler) resolveMediaDeliveryLink(r *http.Request, mediaLink string) (mediaDeliveryDecision, error) {
@@ -292,16 +303,6 @@ func (h *Handler) resolveMediaDeliveryLink(r *http.Request, mediaLink string) (m
 		return mediaDeliveryDecision{}, fmt.Errorf("media access resolver is not configured")
 	}
 	return h.mediaAccess.ResolveLink(r.Context(), r, mediaLink)
-}
-
-// writeMediaResolveError answers a failed policy lookup: a refusal as 403, an
-// outage as 503.
-func writeMediaResolveError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errMediaForbidden) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Media is not available to you"})
-		return
-	}
-	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
 }
 
 // protectedMediaCacheControl keeps every answer out of shared caches: an

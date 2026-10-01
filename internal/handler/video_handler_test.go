@@ -33,6 +33,7 @@ func testCID(seed string) string {
 }
 
 func setupVideoTestHandler(t *testing.T, cfg *config.Config) *Handler {
+	cfg.MediaAccess.AllowUnmanaged = true
 	t.Helper()
 	cluster := newMockCluster()
 	unpinStore, err := store.NewUnpinStore(filepath.Join(t.TempDir(), "test-unpin.json"))
@@ -190,6 +191,7 @@ func TestHandleStreamLinkServesBlurredPosterForPrivateVideo(t *testing.T) {
 	blurredPosterCID := testCID("OpaqueBlurPoster")
 	cluster.files[testPosterCID] = []byte("original-poster")
 	cluster.files[blurredPosterCID] = []byte("blurred-poster")
+	cluster.files[testMasterCID] = []byte(testVideoMasterPosters(testPosterCID, blurredPosterCID))
 
 	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/view/id/77" {

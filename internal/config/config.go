@@ -180,6 +180,8 @@ type AuthConfig struct {
 // MediaAccessConfig points to authenticated generator resources that decide
 // which rendition of media a caller may receive.
 type MediaAccessConfig struct {
+	// AllowUnmanaged explicitly selects a storage deployment without media ACLs.
+	AllowUnmanaged bool
 	// URL resolves legacy CID requests through the bounded list policy resource.
 	URL string
 	// LinkURL resolves opaque /file/link/{id} requests. An empty value falls
@@ -305,9 +307,10 @@ func Load() *Config {
 			LuaMaxMemoryMB:  getEnvInt("AUTH_LUA_MAX_MEMORY_MB", 32),
 		},
 		MediaAccess: MediaAccessConfig{
-			URL:       getEnv("MEDIA_ACCESS_URL", ""),
-			LinkURL:   getEnv("MEDIA_LINK_ACCESS_URL", ""),
-			TimeoutMs: clampInt(getEnvInt("MEDIA_ACCESS_TIMEOUT_MS", 2500), 100, 30000),
+			AllowUnmanaged: getEnvBool("MEDIA_ALLOW_UNMANAGED", false),
+			URL:            getEnv("MEDIA_ACCESS_URL", ""),
+			LinkURL:        getEnv("MEDIA_LINK_ACCESS_URL", ""),
+			TimeoutMs:      clampInt(getEnvInt("MEDIA_ACCESS_TIMEOUT_MS", 2500), 100, 30000),
 		},
 		RateLimit: RateLimitConfig{
 			// A single media-heavy page loads many authenticated thumbnails in

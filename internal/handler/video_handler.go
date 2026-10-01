@@ -176,6 +176,7 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 
 // HandleStreamMaster обрабатывает GET /stream/{cid}/master.m3u8.
 func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	path := r.URL.Path
 	parts := strings.Split(strings.TrimPrefix(path, "/stream/"), "/")
 	if len(parts) < 2 {
@@ -195,7 +196,7 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 	}
 	decision, err := h.resolveMediaDelivery(r, cid)
 	if err != nil {
-		writeMediaResolveError(w, err)
+		writeMediaAccessError(w, err)
 		return
 	}
 	if mediaDeliveryHidesStream(decision.Mode) {
@@ -231,6 +232,7 @@ func writeStreamHidden(w http.ResponseWriter, mode mediaDeliveryMode) {
 // The storage process resolves indexes against the protected master playlist
 // on each request, so a browser can neither learn nor reuse a backing CID.
 func (h *Handler) HandleStreamLink(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/stream/link/"), "/"), "/")
 	if len(parts) < 2 || parts[0] == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid media link stream URL"})
@@ -238,17 +240,24 @@ func (h *Handler) HandleStreamLink(w http.ResponseWriter, r *http.Request) {
 	}
 	decision, err := h.resolveMediaDeliveryLink(r, parts[0])
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
+		writeMediaAccessError(w, err)
 		return
 	}
 	switch {
 	case len(parts) == 2 && parts[1] == "poster.jpg":
 		// A private video never exposes its stream, but its existing blurred
 		// poster is the safe visual replacement used by cards and stories.
-		posterCID := decision.PosterCID
-		if decision.ReplacementCID != "" {
-			posterCID = h.overriddenFile(decision.ReplacementCID)
+		posterCID, err := h.resolveVideoPoster(r, decision, decision.PosterCID)
+		if err != nil {
+			writeMediaAccessError(w, err)
+			return
 		}
+		// A face mask redrawn after upload stands in for the one bundled
+		// with the video: the override map names it.
+		if decision.Mode != mediaDeliveryOriginal {
+			posterCID = h.overriddenFile(posterCID)
+		}
+
 		if err := validateCID(posterCID); err != nil || h.unpinStore.Has(posterCID) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Poster not found"})
 			return
@@ -373,9 +382,13 @@ func (h *Handler) readVideoAsset(ctx context.Context, cid string) (string, error
 		return "", err
 	}
 	defer reader.Close()
-	data, err := io.ReadAll(reader)
+	const maxPlaylistBytes = 4 << 20
+	data, err := io.ReadAll(io.LimitReader(reader, maxPlaylistBytes+1))
 	if err != nil {
 		return "", err
+	}
+	if len(data) > maxPlaylistBytes {
+		return "", fmt.Errorf("playlist too large")
 	}
 	return string(data), nil
 }
@@ -549,6 +562,7 @@ func replacePlaylistURI(line, replacement string) (string, bool) {
 }
 
 func (h *Handler) serveStreamMaster(w http.ResponseWriter, r *http.Request, cid string, decision mediaDeliveryDecision, mediaLink string) {
+	bindStreamRoot(r, decision)
 
 	ctx := r.Context()
 	reader, err := h.fetchVideoAsset(ctx, cid)
@@ -579,6 +593,7 @@ func (h *Handler) serveStreamMaster(w http.ResponseWriter, r *http.Request, cid 
 
 // HandleStreamSegment обрабатывает GET /stream/segment/{cid}.
 func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	path := strings.TrimPrefix(r.URL.Path, "/stream/segment/")
 
 	cid := path
@@ -597,7 +612,7 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	decision, err := h.resolveMediaDelivery(r, cid)
 	if err != nil {
-		writeMediaResolveError(w, err)
+		writeMediaAccessError(w, err)
 		return
 	}
 	isPoster := strings.EqualFold(filepath.Ext(path), ".jpg") || strings.EqualFold(filepath.Ext(path), ".jpeg") || strings.EqualFold(filepath.Ext(path), ".webp") || strings.EqualFold(filepath.Ext(path), ".png")
@@ -605,13 +620,23 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 		writeStreamHidden(w, decision.Mode)
 		return
 	}
-	if isPoster && decision.Mode != mediaDeliveryOriginal {
-		if decision.ReplacementCID == "" {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected poster is unavailable"})
+	if isPoster && decision.Managed {
+		if decision.SourceIsVideo {
+			cid, err = h.resolveVideoPoster(r, decision, cid)
+			if err != nil {
+				writeMediaAccessError(w, err)
+				return
+			}
+		} else if decision.Mode != mediaDeliveryOriginal {
+			writeMediaAccessError(w, errMediaAccessDenied)
 			return
 		}
-		h.serveProtectedPoster(w, r, decision.ReplacementCID, path, decision)
-		return
+		// A protected rendition is read through the override map and, when it
+		// is a bundle, through its variant for the decision.
+		if decision.Mode != mediaDeliveryOriginal {
+			h.serveProtectedPoster(w, r, cid, path, decision)
+			return
+		}
 	}
 
 	h.serveStreamAsset(w, r, cid, path, decision)
@@ -651,6 +676,10 @@ func (h *Handler) serveProtectedPoster(w http.ResponseWriter, r *http.Request, c
 }
 
 func (h *Handler) serveStreamAsset(w http.ResponseWriter, r *http.Request, cid, path string, decision mediaDeliveryDecision) {
+	if h.unpinStore.Has(cid) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Segment not found"})
+		return
+	}
 	ctx := r.Context()
 	reader, err := h.fetchVideoAsset(ctx, cid)
 	if err != nil {
@@ -670,6 +699,7 @@ func (h *Handler) serveStreamAsset(w http.ResponseWriter, r *http.Request, cid, 
 	}
 	w.WriteHeader(http.StatusOK)
 	if contentType == "application/vnd.apple.mpegurl" {
+		bindStreamRoot(r, decision)
 		writePlaylist(w, reader, playlistAuthSuffix(r.URL.Query()))
 		return
 	}
@@ -717,8 +747,19 @@ func (h *Handler) fetchVideoAsset(ctx context.Context, cid string) (io.ReadClose
 	return h.cluster.ClusterTryFetchPath(ctx, cid, bundle.OriginalFilename)
 }
 
+func bindStreamRoot(r *http.Request, decision mediaDeliveryDecision) {
+	if decision.Managed && decision.SourceCID != "" && r.URL.Query().Get("media_link") == "" {
+		query := r.URL.Query()
+		query.Set("media_root", decision.SourceCID)
+		r.URL.RawQuery = query.Encode()
+	}
+}
+
 func playlistAuthSuffix(query url.Values) string {
 	values := url.Values{}
+	if root := query.Get("media_root"); root != "" {
+		values.Set("media_root", root)
+	}
 	key := "token"
 	token := query.Get(key)
 	if token == "" {
