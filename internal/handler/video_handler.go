@@ -95,6 +95,10 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !h.uploads.take(uploadSessionKey(r), limitedReader.bytesRead) {
+		writeUploadError(w, r, http.StatusTooManyRequests, "upload_quota_exceeded", nil)
+		return
+	}
 
 	ctx := r.Context()
 
@@ -109,9 +113,6 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 			}
 			if validationError.MaxDurationSec > 0 {
 				details["max_duration_sec"] = validationError.MaxDurationSec
-			}
-			if validationError.ExpectedAspectRatio != "" {
-				details["expected_aspect_ratio"] = validationError.ExpectedAspectRatio
 			}
 			writeUploadError(w, r, http.StatusBadRequest, validationError.Code, details)
 			return
@@ -128,8 +129,18 @@ func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(outputDir)
 
+	// Videos queue for a transcoding slot, and a transcode that runs past its
+	// time is stopped instead of holding the slot for good.
+	release, err := acquireTranscodeSlot(ctx)
+	if err != nil {
+		writeUploadError(w, r, http.StatusServiceUnavailable, "upload_busy", nil)
+		return
+	}
+	defer release()
+	transcodeCtx, cancelTranscode := context.WithTimeout(ctx, transcodeTimeout)
+	defer cancelTranscode()
 	transcoder := video.NewTranscoder(&h.cfg.Video)
-	result, err := transcoder.Transcode(ctx, tmpInput.Name(), outputDir)
+	result, err := transcoder.Transcode(transcodeCtx, tmpInput.Name(), outputDir)
 	if err != nil {
 		writeUploadError(w, r, http.StatusInternalServerError, "upload_failed", nil)
 		return
@@ -188,11 +199,27 @@ func (h *Handler) HandleStreamMaster(w http.ResponseWriter, r *http.Request) {
 		writeMediaAccessError(w, err)
 		return
 	}
-	if decision.Mode != mediaDeliveryOriginal {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
+	if mediaDeliveryHidesStream(decision.Mode) {
+		writeStreamHidden(w, decision.Mode)
 		return
 	}
 	h.serveStreamMaster(w, r, cid, decision, "")
+}
+
+// mediaDeliveryHidesStream says a video is not played to this viewer, only
+// its poster shown. A private video is blurred for him; a video whose face is
+// hidden cannot be masked frame by frame, and its stream showed the face its
+// masked poster hid.
+func mediaDeliveryHidesStream(mode mediaDeliveryMode) bool {
+	return mode == mediaDeliveryBlur || mode == mediaDeliveryBlurFaces
+}
+
+func writeStreamHidden(w http.ResponseWriter, mode mediaDeliveryMode) {
+	if mode == mediaDeliveryBlurFaces {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Video with a hidden face is unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
 }
 
 // HandleStreamLink serves opaque browser URLs. Every HLS level is addressed by
@@ -225,14 +252,19 @@ func (h *Handler) HandleStreamLink(w http.ResponseWriter, r *http.Request) {
 			writeMediaAccessError(w, err)
 			return
 		}
+		// A face mask redrawn after upload stands in for the one bundled
+		// with the video: the override map names it.
+		if decision.Mode != mediaDeliveryOriginal {
+			posterCID = h.overriddenFile(posterCID)
+		}
 
 		if err := validateCID(posterCID); err != nil || h.unpinStore.Has(posterCID) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Poster not found"})
 			return
 		}
 		h.serveStreamAsset(w, r, posterCID, "poster.jpg", decision)
-	case decision.Mode != mediaDeliveryOriginal:
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
+	case mediaDeliveryHidesStream(decision.Mode):
+		writeStreamHidden(w, decision.Mode)
 		return
 	case len(parts) == 2 && parts[1] == "master.m3u8":
 		h.serveLinkedStreamMaster(w, r, decision)
@@ -584,8 +616,8 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isPoster := strings.EqualFold(filepath.Ext(path), ".jpg") || strings.EqualFold(filepath.Ext(path), ".jpeg") || strings.EqualFold(filepath.Ext(path), ".webp") || strings.EqualFold(filepath.Ext(path), ".png")
-	if decision.Mode != mediaDeliveryOriginal && !isPoster {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Private video is unavailable"})
+	if mediaDeliveryHidesStream(decision.Mode) && !isPoster {
+		writeStreamHidden(w, decision.Mode)
 		return
 	}
 	if isPoster && decision.Managed {
@@ -599,9 +631,48 @@ func (h *Handler) HandleStreamSegment(w http.ResponseWriter, r *http.Request) {
 			writeMediaAccessError(w, errMediaAccessDenied)
 			return
 		}
+		// A protected rendition is read through the override map and, when it
+		// is a bundle, through its variant for the decision.
+		if decision.Mode != mediaDeliveryOriginal {
+			h.serveProtectedPoster(w, r, cid, path, decision)
+			return
+		}
 	}
 
 	h.serveStreamAsset(w, r, cid, path, decision)
+}
+
+// serveProtectedPoster serves the covered picture a viewer is allowed. A
+// replacement that is a bundle is read through its variant for the decision,
+// never through the fallback that reads a bundle's original file.
+func (h *Handler) serveProtectedPoster(w http.ResponseWriter, r *http.Request, cid, path string, decision mediaDeliveryDecision) {
+	ctx := r.Context()
+	reader, err := h.cluster.ClusterTryFetch(ctx, h.overriddenFile(cid))
+	if err != nil {
+		reader, err = h.cluster.ClusterTryFetch(ctx, cid)
+	}
+	if err != nil {
+		manifest, manifestErr := h.readManifest(ctx, cid)
+		if manifestErr != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected poster is unavailable"})
+			return
+		}
+		variant, ok := manifest.Variants[string(decision.Mode)]
+		if !ok || variant.BundlePath == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Protected poster is unavailable"})
+			return
+		}
+		if reader, err = h.cluster.ClusterTryFetchPath(ctx, cid, variant.BundlePath); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Segment not found"})
+			return
+		}
+	}
+	defer reader.Close()
+	w.Header().Set("Content-Type", streamSegmentContentType(path))
+	setUserFileHeaders(w, streamSegmentContentType(path))
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, reader)
 }
 
 func (h *Handler) serveStreamAsset(w http.ResponseWriter, r *http.Request, cid, path string, decision mediaDeliveryDecision) {
@@ -620,6 +691,7 @@ func (h *Handler) serveStreamAsset(w http.ResponseWriter, r *http.Request, cid, 
 	contentType := streamSegmentContentType(path)
 
 	w.Header().Set("Content-Type", contentType)
+	setUserFileHeaders(w, contentType)
 	if decision.Managed {
 		w.Header().Set("Cache-Control", "private, no-store")
 	} else {

@@ -31,7 +31,14 @@ const (
 	mediaDeliveryOriginal  mediaDeliveryMode = "original"
 	mediaDeliveryBlur      mediaDeliveryMode = "blur"
 	mediaDeliveryBlurFaces mediaDeliveryMode = "blur_faces"
+	// mediaDeliveryDeny is a file placed somewhere and reachable by this
+	// viewer through none of those places.
+	mediaDeliveryDeny mediaDeliveryMode = "deny"
 )
+
+// errMediaForbidden is a refusal by the policy - a placed file reachable
+// through none of its places - answered 403 like every other denial.
+var errMediaForbidden = errMediaAccessDenied
 
 type mediaAccessResolver struct {
 	cidEndpoint  *url.URL
@@ -66,10 +73,32 @@ func newMediaAccessResolver(cfg config.MediaAccessConfig) *mediaAccessResolver {
 	return &mediaAccessResolver{cidEndpoint: cidEndpoint, linkEndpoint: linkEndpoint, client: &http.Client{Timeout: timeout}}
 }
 
-// Resolve requires an explicit policy for every resource, including attachments.
-// An empty response is a denial, never evidence that a resource is public.
+// Resolve requires an explicit policy for every resource, including
+// attachments: an empty response is a denial, never evidence that a resource
+// is public. The policy's answer for a placed file comes back as it is, and
+// errMediaForbidden when the viewer may reach none of its places.
+//
+// A media_link in the query speaks only for its own file. The decision used
+// to be taken for the link and applied to whatever CID the path named, so a
+// viewer's own public link served the original of any CID he knew - a private
+// gallery photo, a hidden face. A link that is not this file's is set aside
+// and the file is judged by its CID alone.
 func (r *mediaAccessResolver) Resolve(ctx context.Context, source *http.Request, cid string) (mediaDeliveryDecision, error) {
-	return r.resolve(ctx, source, cid, "")
+	decision, err := r.resolve(ctx, source, cid, "")
+	// Only the link's own file counts: its poster and metadata are written by
+	// whoever registered the asset, so they could name anyone's CID.
+	if err == nil && cid != "" && source != nil && strings.TrimSpace(source.URL.Query().Get("media_link")) != "" &&
+		decision.Managed && decision.SourceCID != cid {
+		stripped := source.Clone(ctx)
+		query := stripped.URL.Query()
+		query.Del("media_link")
+		stripped.URL.RawQuery = query.Encode()
+		decision, err = r.resolve(ctx, stripped, cid, "")
+	}
+	if err == nil && decision.Mode == mediaDeliveryDeny {
+		return mediaDeliveryDecision{}, errMediaForbidden
+	}
+	return decision, err
 }
 
 // ResolveLink resolves an opaque media_links ID through the internal API.
@@ -167,10 +196,14 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 			return mediaDeliveryDecision{}, fmt.Errorf("media policy response has no delivery_mode")
 		}
 		switch mediaDeliveryMode(candidate) {
+		case mediaDeliveryDeny:
+			decision.Mode = mediaDeliveryDeny
 		case mediaDeliveryBlur:
-			decision.Mode = mediaDeliveryBlur
+			if decision.Mode != mediaDeliveryDeny {
+				decision.Mode = mediaDeliveryBlur
+			}
 		case mediaDeliveryBlurFaces:
-			if decision.Mode != mediaDeliveryBlur {
+			if decision.Mode != mediaDeliveryBlur && decision.Mode != mediaDeliveryDeny {
 				decision.Mode = mediaDeliveryBlurFaces
 			}
 		case mediaDeliveryOriginal:
@@ -272,9 +305,12 @@ func (h *Handler) resolveMediaDeliveryLink(r *http.Request, mediaLink string) (m
 	return h.mediaAccess.ResolveLink(r.Context(), r, mediaLink)
 }
 
+// protectedMediaCacheControl keeps every answer out of shared caches: an
+// unmanaged file is a chat or support attachment, private to its thread even
+// though the policy does not govern it.
 func protectedMediaCacheControl(managed bool) string {
 	if managed {
 		return "private, no-store"
 	}
-	return "public, max-age=31536000, immutable"
+	return "private, max-age=31536000, immutable"
 }

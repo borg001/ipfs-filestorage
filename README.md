@@ -328,6 +328,8 @@ docker compose up --build -d
 | `API_KEYS` | empty | Опциональные статические API-ключи через запятую |
 | `UPLOAD_MAX_FILE_SIZE` | `10485760` (10 МБ) | Максимальный размер файла |
 | `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,jpeg,webp,pdf,doc,docx,zip,json,html,txt,mp4,mov,webm,avi,mkv` | Разрешённые расширения |
+| `RATE_LIMIT_RPS` | `100` | Максимум HTTP-запросов в секунду для одного клиентского IP |
+| `RATE_LIMIT_BURST` | `200` | Допустимый кратковременный burst для одного IP; должен покрывать загрузку страницы с media variants |
 | `PINNING_RETRIES` | `3` | Попыток пиннинга при репликации |
 | `PINNING_RETRY_DELAY_MS` | `1000` | Задержка между попытками (мс) |
 | `UNPIN_TTL` | `24h` | Время до физического удаления после soft-delete |

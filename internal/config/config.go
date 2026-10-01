@@ -41,6 +41,9 @@ type APIConfig struct {
 
 type UploadConfig struct {
 	MaxFileSize       int64
+	// DailyBytesPerSession bounds what one session uploads a day on one
+	// instance; 0 turns the bound off.
+	DailyBytesPerSession int64
 	AllowedExtensions []string
 	AllowedMimeTypes  map[string]bool
 }
@@ -144,7 +147,6 @@ type VideoConfig struct {
 	// Макс. размер исходного файла (байт)
 	MaxSizeBytes int64
 	// Допустимое отклонение от пропорции 9:16
-	AspectRatioTolerance float64
 	// Длительность одного чанка (сек)
 	SegmentDurationSec int
 	// Список битрейтов для адаптивного стриминга (напр. ["500k","1500k","4000k"])
@@ -212,21 +214,29 @@ func Load() *Config {
 		API: APIConfig{
 			Keys: getEnvSlice("API_KEYS", []string{}),
 		},
+		// No HTML or SVG: storage is served from the app's origin, and such a
+		// file runs script there.
 		Upload: UploadConfig{
 			MaxFileSize:       getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
-			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "svg", "jpg", "jpeg", "webp", "pdf", "doc", "docx", "zip", "json", "html", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
+			DailyBytesPerSession: getEnvInt64("UPLOAD_DAILY_BYTES_PER_SESSION", 4*1024*1024*1024),
+			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "jpg", "jpeg", "webp", "heic", "heif", "pdf", "doc", "docx", "zip", "json", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
 			AllowedMimeTypes: map[string]bool{
-				"image/png":          true,
-				"image/svg+xml":      true,
-				"image/jpeg":         true,
-				"image/webp":         true,
-				"application/pdf":    true,
-				"application/msword": true,
+				"image/png":     true,
+				"image/jpeg":    true,
+				"image/webp":    true,
+				// A phone shooting in "High Efficiency" uploads HEIC. It is
+				// converted to JPEG at ingest, so nothing downstream has to
+				// know the format.
+				"image/heic":          true,
+				"image/heif":          true,
+				"image/heic-sequence": true,
+				"image/heif-sequence": true,
+				"application/pdf":     true,
+				"application/msword":  true,
 				"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
 				"application/zip":           true,
 				"application/json":          true,
 				"application/octet-stream":  true,
-				"text/html":                 true,
 				"text/plain":                true,
 				"text/plain; charset=utf-8": true,
 				"video/mp4":                 true,
@@ -275,14 +285,13 @@ func Load() *Config {
 			}),
 		},
 		Video: VideoConfig{
-			MaxDurationSec:       getEnvInt("VIDEO_MAX_DURATION_SEC", 2400),
-			MaxSizeBytes:         getEnvInt64("VIDEO_MAX_SIZE_MB", 1024) * 1024 * 1024,
-			AspectRatioTolerance: getEnvFloat("VIDEO_ASPECT_RATIO_TOLERANCE", 0.1),
-			SegmentDurationSec:   getEnvInt("VIDEO_SEGMENT_DURATION_SEC", 4),
-			Bitrates:             getEnvSlice("VIDEO_BITRATES", []string{"500k", "1500k", "4000k"}),
-			FFmpegPath:           validateBinaryPath(getEnv("FFMPEG_PATH", "ffmpeg"), "ffmpeg"),
-			FFprobePath:          validateBinaryPath(getEnv("FFPROBE_PATH", "ffprobe"), "ffprobe"),
-			TempDir:              getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
+			MaxDurationSec:     getEnvInt("VIDEO_MAX_DURATION_SEC", 2400),
+			MaxSizeBytes:       getEnvInt64("VIDEO_MAX_SIZE_MB", 1024) * 1024 * 1024,
+			SegmentDurationSec: getEnvInt("VIDEO_SEGMENT_DURATION_SEC", 4),
+			Bitrates:           getEnvSlice("VIDEO_BITRATES", []string{"500k", "1500k", "4000k"}),
+			FFmpegPath:         validateBinaryPath(getEnv("FFMPEG_PATH", "ffmpeg"), "ffmpeg"),
+			FFprobePath:        validateBinaryPath(getEnv("FFPROBE_PATH", "ffprobe"), "ffprobe"),
+			TempDir:            getEnv("VIDEO_TEMP_DIR", "/tmp/video_processing"),
 			ThumbnailVariants: getEnvImageVariants("VIDEO_THUMBNAIL_VARIANTS", []ImageVariant{
 				{Key: "180x320", Width: 180, Height: 320},
 				{Key: "360x640", Width: 360, Height: 640},
@@ -304,8 +313,11 @@ func Load() *Config {
 			TimeoutMs:      clampInt(getEnvInt("MEDIA_ACCESS_TIMEOUT_MS", 2500), 100, 30000),
 		},
 		RateLimit: RateLimitConfig{
-			RPS:   getEnvFloat("RATE_LIMIT_RPS", 10),
-			Burst: getEnvInt("RATE_LIMIT_BURST", 20),
+			// A single media-heavy page loads many authenticated thumbnails in
+			// parallel. Keep the default above that normal browser burst while
+			// retaining a configurable per-client limiter for deployments.
+			RPS:   getEnvFloat("RATE_LIMIT_RPS", 100),
+			Burst: getEnvInt("RATE_LIMIT_BURST", 200),
 		},
 	}
 }
