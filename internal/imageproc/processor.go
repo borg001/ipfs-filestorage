@@ -66,6 +66,29 @@ const MaxDecodePixels = 100_000_000
 // ErrImageTooLarge is a picture whose dimensions exceed MaxDecodePixels.
 var ErrImageTooLarge = fmt.Errorf("image dimensions exceed %d pixels", MaxDecodePixels)
 
+// FitPreview keeps the complete photograph while limiting its longest side.
+// It is used for feed display; opening the photograph still requests original.
+func (p *Processor) FitPreview(ctx context.Context, data []byte, maxSide int) ([]byte, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > MaxDecodePixels {
+		return nil, ErrImageTooLarge
+	}
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	scale := math.Min(1, float64(maxSide)/float64(max(cfg.Width, cfg.Height)))
+	width := max(1, int(math.Round(float64(cfg.Width)*scale)))
+	height := max(1, int(math.Round(float64(cfg.Height)*scale)))
+	dst := image.NewNRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), xdraw.Over, nil)
+	return p.encode(ctx, dst, "jpeg")
+}
+
 func (p *Processor) Process(ctx context.Context, data []byte, contentType string) (Result, error) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {

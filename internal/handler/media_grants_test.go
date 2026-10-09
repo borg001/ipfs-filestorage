@@ -51,7 +51,7 @@ func TestGrantDownloadsProtectedBytesWithoutPolicyResolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, suffix := range []string{"", "/320x320", "/original", "/blur_faces"} {
+	for _, suffix := range []string{"", "/320x320", "/original", "/blur_faces", "/fit_1024"} {
 		request := httptest.NewRequest("GET", "/file/link/55"+suffix+"?token=session&grant="+url.QueryEscape(grant), nil)
 		w := httptest.NewRecorder()
 		h.HandleFileLink(w, request)
@@ -62,7 +62,7 @@ func TestGrantDownloadsProtectedBytesWithoutPolicyResolver(t *testing.T) {
 			t.Fatal("capability response was publicly cacheable")
 		}
 	}
-	if state.checks != 4 {
+	if state.checks != 5 {
 		t.Fatal("downloads did not check online revoke state")
 	}
 }

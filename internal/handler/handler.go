@@ -20,10 +20,11 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/imageproc"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
-	"github.com/borg001/ipfs-filestorage/internal/middleware"
 	"github.com/borg001/ipfs-filestorage/internal/mediagrant"
+	"github.com/borg001/ipfs-filestorage/internal/middleware"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 	"github.com/borg001/ipfs-filestorage/internal/unpin"
+	"golang.org/x/sync/singleflight"
 )
 
 // Response — стандартная структура ответа API.
@@ -50,6 +51,7 @@ type Handler struct {
 	mediaAccess      *mediaAccessResolver
 	mediaGrants      *mediaGrantVerifier
 	uploads          *uploadBudget
+	fitPreviewGroup  singleflight.Group
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -528,6 +530,27 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		variantKey = string(decision.Mode)
 	}
 	replacement := ""
+	if len(parts) == 1 && variantKey == fitPreviewVariant {
+		// Policy may replace the requested variant with a privacy mask. Only
+		// the original delivery mode reaches this branch.
+		previewCID, err := h.ensureFitPreview(ctx, cid, manifest)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
+			return
+		}
+		reader, err := h.cluster.ClusterTryFetch(ctx, previewCID)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
+			return
+		}
+		defer reader.Close()
+		w.Header().Set("Content-Type", "image/jpeg")
+		setUserFileHeaders(w, "image/jpeg")
+		w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
+		w.WriteHeader(http.StatusOK)
+		io.Copy(w, reader)
+		return
+	}
 	if variantKey != "" {
 		variant, ok := manifest.Variants[variantKey]
 		if !ok {
