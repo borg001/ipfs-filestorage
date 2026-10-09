@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/imageproc"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
+	"github.com/borg001/ipfs-filestorage/internal/middleware"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 	"github.com/borg001/ipfs-filestorage/internal/unpin"
 )
@@ -36,12 +38,16 @@ type Response struct {
 
 // Handler содержит HTTP-хендлеры сервиса.
 type Handler struct {
-	cfg            *config.Config
-	cluster        ipfs.Clusterer
-	unpinStore     *store.UnpinStore
-	unpinWorker    *unpin.Worker
-	imageProcessor *imageproc.Processor
-	mediaAccess    *mediaAccessResolver
+	cfg         *config.Config
+	cluster     ipfs.Clusterer
+	unpinStore  *store.UnpinStore
+	unpinWorker *unpin.Worker
+	// variantOverrides serves variants drawn again after upload, such as a
+	// face mask redrawn with soft edges, in place of the bundled ones.
+	variantOverrides *store.VariantOverrides
+	imageProcessor   *imageproc.Processor
+	mediaAccess      *mediaAccessResolver
+	uploads          *uploadBudget
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -56,12 +62,20 @@ func NewHandler(cfg *config.Config) *Handler {
 		unpinStore, _ = store.NewUnpinStore("/tmp/unpin-store.json")
 	}
 
+	// Kept beside the unpin list, on each instance's own data volume.
+	variantOverrides, err := store.NewVariantOverrides(filepath.Join(filepath.Dir(cfg.Unpin.StorePath), "variant-overrides.json"))
+	if err != nil {
+		log.Printf("[STORAGE] variant overrides unavailable: %v", err)
+	}
+
 	h := &Handler{
-		cfg:            cfg,
-		cluster:        cluster,
-		unpinStore:     unpinStore,
-		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
-		mediaAccess:    newMediaAccessResolver(cfg.MediaAccess),
+		cfg:              cfg,
+		cluster:          cluster,
+		unpinStore:       unpinStore,
+		variantOverrides: variantOverrides,
+		imageProcessor:   imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
+		mediaAccess:      newMediaAccessResolver(cfg.MediaAccess),
+		uploads:          newUploadBudget(cfg.Upload.DailyBytesPerSession),
 	}
 
 	// Запускаем TTL worker
@@ -120,6 +134,9 @@ func formatFromFilename(filename string) string {
 }
 
 func (h *Handler) buildFileBundle(ctx context.Context, filename string, data []byte, contentType string) (bundle.Manifest, error) {
+	// The original is served as uploaded, so what a photo says about where it
+	// was taken is taken out first.
+	data = imageproc.StripMetadata(data)
 	manifest := bundle.NewFileManifest(filename, contentType, formatFromFilename(filename), int64(len(data)))
 	entries := map[string][]byte{
 		bundle.OriginalFilename: data,
@@ -164,15 +181,20 @@ func (h *Handler) buildFileBundle(ctx context.Context, filename string, data []b
 }
 
 // validateCID checks that a string looks like a valid IPFS CID.
+// cidV0Pattern and cidV1Pattern accept a CID and nothing after it. Checking
+// only the prefix and the length let "Qm…/original" through as a CID: the
+// access check did not know such a CID and allowed it, and the cluster read
+// the original file out of a private photo's bundle.
+var (
+	cidV0Pattern = regexp.MustCompile(`^Qm[A-Za-z0-9]{44}$`)
+	cidV1Pattern = regexp.MustCompile(`^baf[a-z0-9]{50,}$`)
+)
+
 func validateCID(cid string) error {
 	if cid == "" {
 		return fmt.Errorf("CID required")
 	}
-	// Accept Qm... (CIDv0) and bafy.../bafk... (CIDv1)
-	if strings.HasPrefix(cid, "Qm") && len(cid) >= 46 {
-		return nil
-	}
-	if (strings.HasPrefix(cid, "bafy") || strings.HasPrefix(cid, "bafk")) && len(cid) >= 50 {
+	if cidV0Pattern.MatchString(cid) || cidV1Pattern.MatchString(cid) {
 		return nil
 	}
 	return fmt.Errorf("invalid CID format")
@@ -229,10 +251,27 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !h.uploads.take(uploadSessionKey(r), limitedReader.bytesRead) {
+		writeUploadError(w, r, http.StatusTooManyRequests, "upload_quota_exceeded", nil)
+		return
+	}
 
 	ctx := r.Context()
 	contentType := http.DetectContentType(data)
-	manifest, err := h.buildFileBundle(ctx, header.Filename, data, contentType)
+	filename := header.Filename
+	if imageproc.IsHEIF(data) {
+		converted, convertErr := h.imageProcessor.TranscodeHEIF(ctx, data)
+		if convertErr != nil {
+			writeUploadError(w, r, http.StatusBadRequest, "unsupported_file_type", map[string]any{
+				"allowed_extensions": h.cfg.Upload.AllowedExtensions,
+			})
+			return
+		}
+		data = converted
+		filename = imageproc.JPEGFilename(filename)
+		contentType = "image/jpeg"
+	}
+	manifest, err := h.buildFileBundle(ctx, filename, data, contentType)
 	if err != nil {
 		writeUploadError(w, r, http.StatusInternalServerError, "upload_failed", nil)
 		return
@@ -242,8 +281,16 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, responseFromManifest(manifest, true))
 }
 
+// maxFilesPerUpload bounds one multi-file upload.
+const maxFilesPerUpload = 20
+
 // HandleUploadMultiple обрабатывает POST /upload-multiple.
 func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
+	// One request carries at most maxFilesPerUpload files of the allowed size:
+	// the body was unbounded and every file got a goroutine of its own.
+	if h.cfg != nil && h.cfg.Upload.MaxFileSize > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, h.cfg.Upload.MaxFileSize*maxFilesPerUpload+(1<<20))
+	}
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
 		return
@@ -251,6 +298,18 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	files := r.MultipartForm.File["files"]
 	if len(files) == 0 {
 		writeUploadError(w, r, http.StatusBadRequest, "upload_missing_file", nil)
+		return
+	}
+	if len(files) > maxFilesPerUpload {
+		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
+		return
+	}
+	var batchBytes int64
+	for _, fh := range files {
+		batchBytes += fh.Size
+	}
+	if !h.uploads.take(uploadSessionKey(r), batchBytes) {
+		writeUploadError(w, r, http.StatusTooManyRequests, "upload_quota_exceeded", nil)
 		return
 	}
 
@@ -310,7 +369,20 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 			}
 
 			contentType := http.DetectContentType(data)
-			manifest, err := h.buildFileBundle(ctx, fileHeader.Filename, data, contentType)
+			filename := fileHeader.Filename
+			if imageproc.IsHEIF(data) {
+				converted, convertErr := h.imageProcessor.TranscodeHEIF(ctx, data)
+				if convertErr != nil {
+					mu.Lock()
+					failures = append(failures, uploadFailure{code: "unsupported_file_type", filename: fileHeader.Filename})
+					mu.Unlock()
+					return
+				}
+				data = converted
+				filename = imageproc.JPEGFilename(filename)
+				contentType = "image/jpeg"
+			}
+			manifest, err := h.buildFileBundle(ctx, filename, data, contentType)
 			if err != nil {
 				mu.Lock()
 				failures = append(failures, uploadFailure{code: "upload_failed", filename: fileHeader.Filename})
@@ -448,6 +520,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	if decision.Managed && decision.Mode != mediaDeliveryOriginal {
 		variantKey = string(decision.Mode)
 	}
+	replacement := ""
 	if variantKey != "" {
 		variant, ok := manifest.Variants[variantKey]
 		if !ok {
@@ -456,12 +529,21 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		}
 		bundlePath = variant.BundlePath
 		contentType = variant.ContentType
+		replacement, _ = h.variantOverrides.Get(store.VariantOverrideKey(cid, variantKey))
 	} else if len(parts) > 1 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}
 
-	reader, err := h.cluster.ClusterTryFetchPath(ctx, cid, bundlePath)
+	// A variant drawn again after upload is served in place of the bundled
+	// one; if its file cannot be read, the bundled one still can.
+	var reader io.ReadCloser
+	if replacement != "" {
+		reader, err = h.cluster.ClusterTryFetch(ctx, replacement)
+	}
+	if replacement == "" || err != nil {
+		reader, err = h.cluster.ClusterTryFetchPath(ctx, cid, bundlePath)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
@@ -479,13 +561,43 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	}
 
 	w.Header().Set("Content-Type", contentType)
+	setUserFileHeaders(w, contentType)
 	w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, buffered)
 }
 
+// setUserFileHeaders keeps a file anyone uploaded from acting as a page of
+// the app. Storage is served from the app's own origin, and an uploaded HTML
+// or SVG file ran its script there, next to the session token. No script runs
+// in any stored file, and only pictures, video and sound open in place;
+// everything else is downloaded.
+func setUserFileHeaders(w http.ResponseWriter, contentType string) {
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !inlineSafeContentType(contentType) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment")
+	}
+}
+
+func inlineSafeContentType(contentType string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	switch mediaType {
+	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic", "image/heif", "text/plain":
+		return true
+	}
+	return strings.HasPrefix(mediaType, "video/") || strings.HasPrefix(mediaType, "audio/") || mediaType == "application/vnd.apple.mpegurl"
+}
+
 // HandleDelete обрабатывает DELETE /file/{cid}.
 func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	// Files are taken down by the platform, never by a signed-in person: any
+	// session could unpin any CID it had seen, and CIDs travel in every page.
+	if middleware.UserIDFromContext(r.Context()) != "api-key" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Deleting files is not allowed"})
+		return
+	}
 	cid := strings.TrimPrefix(r.URL.Path, "/file/")
 	if err := validateCID(cid); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

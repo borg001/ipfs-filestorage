@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/borg001/ipfs-filestorage/internal/bundle"
@@ -224,6 +225,54 @@ func TestVideoPolicyProtectsMasterSegmentsAndPosters(t *testing.T) {
 		h.HandleStreamSegment(segmentW, segmentReq)
 		if segmentW.Code != http.StatusForbidden {
 			t.Fatalf("segment status = %d, want 403", segmentW.Code)
+		}
+	})
+
+	// A video whose face is hidden cannot be masked frame by frame: its
+	// stream is not played to whom the face is hidden from, and the poster
+	// with the masked face stands in for it (theGHub1/api#284).
+	t.Run("hidden face master and segment are denied, poster is masked", func(t *testing.T) {
+		h := setupVideoTestHandler(t, cfg)
+		cluster := h.cluster.(*mockCluster)
+		cluster.files[testMasterCID] = []byte("#EXTM3U\n")
+		cluster.files[testSegmentCID] = []byte("original-segment")
+		maskedPosterCID := testCID("MaskedPoster")
+		cluster.files[testPosterCID] = []byte("original-poster")
+		cluster.files[maskedPosterCID] = []byte("masked-poster")
+
+		for _, target := range []struct {
+			cid    string
+			path   string
+			handle func(http.ResponseWriter, *http.Request)
+		}{
+			{testMasterCID, "/stream/" + testMasterCID + "/master.m3u8?token=viewer-token", h.HandleStreamMaster},
+			{testSegmentCID, "/stream/segment/" + testSegmentCID + ".m4s?token=viewer-token", h.HandleStreamSegment},
+		} {
+			policy := policyServer(t, target.cid, []map[string]interface{}{{"delivery_mode": "blur_faces"}})
+			h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
+			w := httptest.NewRecorder()
+			target.handle(w, httptest.NewRequest(http.MethodGet, target.path, nil))
+			policy.Close()
+			// A segment asked for by its own CID is refused before its mode
+			// is read: it is bound to no resource the policy answered for.
+			if w.Code != http.StatusForbidden || (target.cid == testMasterCID && !strings.Contains(w.Body.String(), "hidden face")) {
+				t.Fatalf("%s status = %d %s, want 403 for a hidden face", target.path, w.Code, w.Body.String())
+			}
+		}
+
+		// The masked poster is the one the video's master binds to the mode,
+		// not one named by editable metadata.
+		cluster.files[testMasterCID] = []byte(testVideoMasterPosters(testPosterCID, maskedPosterCID))
+		policy := policyServer(t, testPosterCID, []map[string]interface{}{{
+			"storage_uri": "video://" + testMasterCID, "poster_uri": "ipfs://" + testPosterCID,
+			"delivery_mode": "blur_faces",
+		}})
+		defer policy.Close()
+		h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
+		w := httptest.NewRecorder()
+		h.HandleStreamSegment(w, httptest.NewRequest(http.MethodGet, "/stream/segment/"+testPosterCID+".jpg?token=viewer-token", nil))
+		if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), []byte("masked-poster")) {
+			t.Fatalf("poster = %d %q, want the masked poster", w.Code, w.Body.Bytes())
 		}
 	})
 

@@ -284,3 +284,35 @@ func TestHandleUpload_ImageBundleVariants(t *testing.T) {
 		t.Fatalf("Privacy variant dimensions = %dx%d, want 200x120", privacyJPEG.Width, privacyJPEG.Height)
 	}
 }
+
+// A HEIC still is converted to JPEG at ingest. A payload that carries the HEIF
+// brand but cannot be converted is refused instead of being stored as an
+// original no browser can display.
+func TestHandleUpload_UnconvertibleHEIFIsRefused(t *testing.T) {
+	cfg := &config.Config{
+		Upload: config.UploadConfig{
+			MaxFileSize:       1024,
+			AllowedExtensions: []string{"heic"},
+			AllowedMimeTypes:  map[string]bool{"image/heic": true, "application/octet-stream": true},
+		},
+		Pinning: config.PinningConfig{RetryDelayMs: 100, Retries: 1},
+	}
+
+	h := setupTestHandler(cfg)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("file", "IMG_0042.heic")
+	payload := append([]byte{0x00, 0x00, 0x00, 0x18}, []byte("ftypheic")...)
+	part.Write(append(payload, []byte("mif1heic")...))
+	writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/upload", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	h.HandleUpload(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("Status = %d, want 400 for a HEIF payload that cannot be converted, body: %s", w.Code, w.Body.String())
+	}
+}

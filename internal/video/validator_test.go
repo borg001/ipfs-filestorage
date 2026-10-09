@@ -19,9 +19,8 @@ func (m *mockProber) Probe(ctx context.Context, inputPath string) (*VideoInfo, e
 
 func TestValidateFileSizeTooLarge(t *testing.T) {
 	cfg := &config.VideoConfig{
-		MaxSizeBytes:         10 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
+		MaxSizeBytes:   10 * 1024 * 1024,
+		MaxDurationSec: 60,
 	}
 	v := &Validator{cfg: cfg, prober: &mockProber{}}
 
@@ -34,9 +33,8 @@ func TestValidateFileSizeTooLarge(t *testing.T) {
 
 func TestValidateFileSizeAtLimit(t *testing.T) {
 	cfg := &config.VideoConfig{
-		MaxSizeBytes:         10 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
+		MaxSizeBytes:   10 * 1024 * 1024,
+		MaxDurationSec: 60,
 	}
 	v := &Validator{cfg: cfg, prober: &mockProber{
 		info: &VideoInfo{Duration: 5, Width: 1080, Height: 1920},
@@ -50,9 +48,8 @@ func TestValidateFileSizeAtLimit(t *testing.T) {
 
 func TestValidateDurationTooLong(t *testing.T) {
 	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       30,
-		AspectRatioTolerance: 0.1,
+		MaxSizeBytes:   100 * 1024 * 1024,
+		MaxDurationSec: 30,
 	}
 	v := &Validator{cfg: cfg, prober: &mockProber{
 		info: &VideoInfo{Duration: 60, Width: 1080, Height: 1920},
@@ -67,9 +64,8 @@ func TestValidateDurationTooLong(t *testing.T) {
 
 func TestValidateDurationAtLimit(t *testing.T) {
 	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       30,
-		AspectRatioTolerance: 0.1,
+		MaxSizeBytes:   100 * 1024 * 1024,
+		MaxDurationSec: 30,
 	}
 	v := &Validator{cfg: cfg, prober: &mockProber{
 		info: &VideoInfo{Duration: 30, Width: 1080, Height: 1920},
@@ -81,143 +77,36 @@ func TestValidateDurationAtLimit(t *testing.T) {
 	}
 }
 
-func TestValidateWrongAspectRatio(t *testing.T) {
-	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
-	}
-	v := &Validator{cfg: cfg, prober: &mockProber{
-		info: &VideoInfo{Duration: 10, Width: 1920, Height: 1080},
-	}}
-
-	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
-	var validationError *ValidationError
-	if !errors.As(err, &validationError) || validationError.Code != "video_aspect_ratio_invalid" || validationError.ExpectedAspectRatio != "9:16" {
-		t.Fatalf("Expected typed aspect ratio validation error, got %v", err)
-	}
-}
-
-func TestValidateCorrectVertical9x16(t *testing.T) {
-	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
-	}
-	v := &Validator{cfg: cfg, prober: &mockProber{
-		info: &VideoInfo{Duration: 10, Width: 1080, Height: 1920},
-	}}
-
-	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
-	if err != nil {
-		t.Errorf("Expected no error for valid video, got: %v", err)
-	}
-}
-
-func TestValidateAcceptsPhoneVideoWithVerticalDisplayRotation(t *testing.T) {
-	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
-	}
-	v := &Validator{cfg: cfg, prober: &mockProber{
-		// A phone can store landscape pixels and use a 90 degree display
-		// matrix. The rendered result is 1080x1920, not 1920x1080.
-		info: &VideoInfo{Duration: 10, Width: 1920, Height: 1080, Rotation: 90},
-	}}
-
-	if err := v.Validate(context.Background(), "/some/phone-video.mp4", 1024); err != nil {
-		t.Fatalf("Expected rotated vertical phone video to be accepted, got: %v", err)
-	}
-}
-
-func TestValidateRejectsRotatedLandscapeVideo(t *testing.T) {
-	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
-	}
-	v := &Validator{cfg: cfg, prober: &mockProber{
-		info: &VideoInfo{Duration: 10, Width: 1080, Height: 1920, Rotation: 90},
-	}}
-
-	err := v.Validate(context.Background(), "/some/rotated-landscape-video.mp4", 1024)
-	var validationError *ValidationError
-	if !errors.As(err, &validationError) || validationError.Code != "video_aspect_ratio_invalid" {
-		t.Fatalf("Expected rotated landscape video to be rejected, got %v", err)
-	}
-}
-
-func TestValidateZeroDimensions(t *testing.T) {
-	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
-	}
-	v := &Validator{cfg: cfg, prober: &mockProber{
-		info: &VideoInfo{Duration: 10, Width: 0, Height: 0},
-	}}
-
-	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
-	if err != nil {
-		t.Errorf("Zero dimensions should skip aspect ratio check, got: %v", err)
-	}
-}
-
-func TestValidateZeroWidthOnly(t *testing.T) {
-	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
-	}
-	v := &Validator{cfg: cfg, prober: &mockProber{
-		info: &VideoInfo{Duration: 10, Width: 0, Height: 1920},
-	}}
-
-	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
-	if err != nil {
-		t.Errorf("Zero width should skip aspect ratio check, got: %v", err)
-	}
-}
-
-func TestValidateNear9x16(t *testing.T) {
-	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.05,
-	}
-	v := &Validator{cfg: cfg, prober: &mockProber{
-		info: &VideoInfo{Duration: 10, Width: 1080, Height: 1920},
-	}}
-
-	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
-	if err != nil {
-		t.Errorf("Expected no error for exact 9:16, got: %v", err)
-	}
-}
-
-func TestValidateSlightlyOutsideTolerance(t *testing.T) {
-	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.01,
-	}
-	v := &Validator{cfg: cfg, prober: &mockProber{
-		info: &VideoInfo{Duration: 10, Width: 720, Height: 1200},
-	}}
-
-	err := v.Validate(context.Background(), "/some/file.mp4", 1024)
-	if err == nil {
-		t.Error("Expected error for aspect ratio outside tight tolerance")
+// A publication carries the frame it is shown in, so a video is accepted as it
+// was shot - vertical, square, landscape or rotated by a phone - and cropped to
+// that frame where it is presented.
+func TestValidateAcceptsEveryShape(t *testing.T) {
+	cfg := &config.VideoConfig{MaxSizeBytes: 100 * 1024 * 1024, MaxDurationSec: 60}
+	for _, testCase := range []struct {
+		name string
+		info *VideoInfo
+	}{
+		{name: "vertical", info: &VideoInfo{Duration: 10, Width: 1080, Height: 1920}},
+		{name: "square", info: &VideoInfo{Duration: 10, Width: 1080, Height: 1080}},
+		{name: "landscape", info: &VideoInfo{Duration: 10, Width: 1920, Height: 1080}},
+		{name: "wide", info: &VideoInfo{Duration: 10, Width: 1080, Height: 566}},
+		{name: "rotated by a phone", info: &VideoInfo{Duration: 10, Width: 1920, Height: 1080, Rotation: 90}},
+		{name: "dimensions unknown", info: &VideoInfo{Duration: 10}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			v := &Validator{cfg: cfg, prober: &mockProber{info: testCase.info}}
+			if err := v.Validate(context.Background(), "/some/file.mp4", 1024); err != nil {
+				t.Fatalf("Expected %s video to be accepted, got: %v", testCase.name, err)
+			}
+		})
 	}
 }
 
 func TestValidateProbeError(t *testing.T) {
 	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
-		FFprobePath:          "nonexistent_ffprobe",
+		MaxSizeBytes:   100 * 1024 * 1024,
+		MaxDurationSec: 60,
+		FFprobePath:    "nonexistent_ffprobe",
 	}
 	v := NewValidator(cfg)
 
@@ -229,9 +118,8 @@ func TestValidateProbeError(t *testing.T) {
 
 func TestWithProber(t *testing.T) {
 	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
+		MaxSizeBytes:   100 * 1024 * 1024,
+		MaxDurationSec: 60,
 	}
 	v := NewValidator(cfg)
 	mock := &mockProber{
@@ -256,9 +144,8 @@ func TestParseFrameRate(t *testing.T) {
 
 func TestValidateProbeReturnsError(t *testing.T) {
 	cfg := &config.VideoConfig{
-		MaxSizeBytes:         100 * 1024 * 1024,
-		MaxDurationSec:       60,
-		AspectRatioTolerance: 0.1,
+		MaxSizeBytes:   100 * 1024 * 1024,
+		MaxDurationSec: 60,
 	}
 	v := &Validator{cfg: cfg, prober: &mockProber{
 		err: context.DeadlineExceeded,

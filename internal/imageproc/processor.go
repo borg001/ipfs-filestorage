@@ -58,10 +58,21 @@ func (p *Processor) Close() {
 	}
 }
 
+// MaxDecodePixels bounds the pictures decoded in full. The upload limit is on
+// compressed bytes, so a small file declaring enormous dimensions made the
+// decoder allocate gigabytes. A hundred megapixels is above any phone camera.
+const MaxDecodePixels = 100_000_000
+
+// ErrImageTooLarge is a picture whose dimensions exceed MaxDecodePixels.
+var ErrImageTooLarge = fmt.Errorf("image dimensions exceed %d pixels", MaxDecodePixels)
+
 func (p *Processor) Process(ctx context.Context, data []byte, contentType string) (Result, error) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return Result{IsImage: false}, nil
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > MaxDecodePixels {
+		return Result{}, ErrImageTooLarge
 	}
 
 	result := Result{
