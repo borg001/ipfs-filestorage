@@ -1,6 +1,7 @@
 services:
   # Bootstrap node — lightweight peer discovery only, no user data
   ipfs-bootstrap:
+    restart: unless-stopped
     image: ipfs/kubo:latest
     container_name: ipfs-bootstrap
     volumes:
@@ -22,6 +23,7 @@ services:
 
   # Storage IPFS node 1
   ipfs1:
+    restart: unless-stopped
     image: ipfs/kubo:latest
     container_name: ipfs1
     volumes:
@@ -48,6 +50,7 @@ services:
 
   # Storage IPFS node 2
   ipfs2:
+    restart: unless-stopped
     image: ipfs/kubo:latest
     container_name: ipfs2
     volumes:
@@ -74,6 +77,7 @@ services:
 
   # Storage API service 1
   storage1:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile
@@ -102,6 +106,7 @@ services:
 
   # Storage API service 2
   storage2:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile
@@ -130,6 +135,7 @@ services:
 
   # Nginx load balancer
   nginx:
+    restart: unless-stopped
     image: nginx:alpine
     container_name: nginx
     ports:
