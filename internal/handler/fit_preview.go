@@ -10,16 +10,41 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/store"
 )
 
-const (
-	fitPreviewVariant   = "fit_1024"
-	fitPreviewMaxSource = 100 << 20
-)
+const fitPreviewMaxSource = 100 << 20
+
+var fitPreviewSizes = map[string]int{"fit_480": 480, "fit_1024": 1024}
 
 // ensureFitPreview generates a rendition once for both existing and new
 // bundles. The IPFS CID is persisted on the instance's data volume, alongside
 // the existing variant overrides, so restarts do not trigger recomputation.
-func (h *Handler) ensureFitPreview(ctx context.Context, cid string, manifest bundle.Manifest) (string, error) {
-	key := store.VariantOverrideKey(cid, fitPreviewVariant)
+func (h *Handler) ensureFitPreview(ctx context.Context, cid string, manifest bundle.Manifest, variant, sourceVariant string) (string, error) {
+	maxSide, ok := fitPreviewSizes[variant]
+	if !ok {
+		return "", fmt.Errorf("unsupported fit preview %q", variant)
+	}
+	if h.imageProcessor == nil || h.variantOverrides == nil || manifest.Type != "image" {
+		return "", fmt.Errorf("image preview is not configured")
+	}
+	sourcePath := manifest.Original.BundlePath
+	sourceCID := ""
+	if sourceVariant != "" {
+		asset, ok := manifest.Variants[sourceVariant]
+		if !ok {
+			return "", fmt.Errorf("source variant %q is unavailable", sourceVariant)
+		}
+		sourcePath = asset.BundlePath
+		sourceCID, _ = h.variantOverrides.Get(store.VariantOverrideKey(cid, sourceVariant))
+	}
+	// A redrawn privacy mask changes the source CID. Its fit rendition must
+	// use a new key so an old preview cannot outlive the replacement mask.
+	cacheVariant := variant
+	if sourceVariant != "" {
+		cacheVariant += "/" + sourceVariant
+		if sourceCID != "" {
+			cacheVariant += "/" + sourceCID
+		}
+	}
+	key := store.VariantOverrideKey(cid, cacheVariant)
 	if previewCID, ok := h.variantOverrides.Get(key); ok {
 		return previewCID, nil
 	}
@@ -27,10 +52,13 @@ func (h *Handler) ensureFitPreview(ctx context.Context, cid string, manifest bun
 		if previewCID, ok := h.variantOverrides.Get(key); ok {
 			return previewCID, nil
 		}
-		if h.imageProcessor == nil || h.variantOverrides == nil || manifest.Type != "image" {
-			return nil, fmt.Errorf("image preview is not configured")
+		var reader io.ReadCloser
+		var err error
+		if sourceCID != "" {
+			reader, err = h.cluster.ClusterTryFetch(ctx, sourceCID)
+		} else {
+			reader, err = h.cluster.ClusterTryFetchPath(ctx, cid, sourcePath)
 		}
-		reader, err := h.cluster.ClusterTryFetchPath(ctx, cid, manifest.Original.BundlePath)
 		if err != nil {
 			return nil, err
 		}
@@ -42,11 +70,11 @@ func (h *Handler) ensureFitPreview(ctx context.Context, cid string, manifest bun
 		if len(source) > fitPreviewMaxSource {
 			return nil, fmt.Errorf("source image exceeds preview limit")
 		}
-		preview, err := h.imageProcessor.FitPreview(ctx, source, 1024)
+		preview, err := h.imageProcessor.FitPreview(ctx, source, maxSide)
 		if err != nil {
 			return nil, err
 		}
-		added, err := h.cluster.ClusterAdd(ctx, fitPreviewVariant+".jpg", bytes.NewReader(preview))
+		added, err := h.cluster.ClusterAdd(ctx, variant+".jpg", bytes.NewReader(preview))
 		if err != nil {
 			return nil, err
 		}

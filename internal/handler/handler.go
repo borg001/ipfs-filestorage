@@ -526,14 +526,28 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	if len(parts) == 1 && parts[0] != "" {
 		variantKey = parts[0]
 	}
-	if decision.Managed && decision.Mode != mediaDeliveryOriginal {
-		variantKey = string(decision.Mode)
+	// An explicit masked source may be requested at a bounded size. Keep the
+	// policy's stronger mask even when the URL asks for a weaker one.
+	requestedMask := ""
+	if len(parts) == 2 {
+		if _, ok := fitPreviewSizes[parts[0]]; !ok || (parts[1] != config.PrivacyBlurVariantKey && parts[1] != config.PrivacyFaceBlurVariantKey) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
+			return
+		}
+		variantKey = parts[0]
+		requestedMask = parts[1]
+	} else if len(parts) > 2 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
+		return
 	}
-	replacement := ""
-	if len(parts) == 1 && variantKey == fitPreviewVariant {
-		// Policy may replace the requested variant with a privacy mask. Only
-		// the original delivery mode reaches this branch.
-		previewCID, err := h.ensureFitPreview(ctx, cid, manifest)
+	if _, fitPreview := fitPreviewSizes[variantKey]; fitPreview {
+		sourceVariant := requestedMask
+		if decision.Managed && decision.Mode != mediaDeliveryOriginal {
+			if decision.Mode == mediaDeliveryBlur || sourceVariant != config.PrivacyBlurVariantKey {
+				sourceVariant = string(decision.Mode)
+			}
+		}
+		previewCID, err := h.ensureFitPreview(ctx, cid, manifest, variantKey, sourceVariant)
 		if err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
 			return
@@ -551,6 +565,10 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		io.Copy(w, reader)
 		return
 	}
+	if decision.Managed && decision.Mode != mediaDeliveryOriginal {
+		variantKey = string(decision.Mode)
+	}
+	replacement := ""
 	if variantKey != "" {
 		variant, ok := manifest.Variants[variantKey]
 		if !ok {
