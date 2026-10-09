@@ -21,6 +21,7 @@ import (
 	"github.com/borg001/ipfs-filestorage/internal/imageproc"
 	"github.com/borg001/ipfs-filestorage/internal/ipfs"
 	"github.com/borg001/ipfs-filestorage/internal/middleware"
+	"github.com/borg001/ipfs-filestorage/internal/mediagrant"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 	"github.com/borg001/ipfs-filestorage/internal/unpin"
 )
@@ -47,11 +48,16 @@ type Handler struct {
 	variantOverrides *store.VariantOverrides
 	imageProcessor   *imageproc.Processor
 	mediaAccess      *mediaAccessResolver
+	mediaGrants      *mediaGrantVerifier
 	uploads          *uploadBudget
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
 func NewHandler(cfg *config.Config) *Handler {
+	grants, err := newMediaGrantVerifier(cfg.MediaGrants)
+	if err != nil {
+		panic(fmt.Errorf("media grant initialization: %w", err))
+	}
 	cluster := ipfs.NewCluster(cfg.IPFS.ClusterNodes)
 	if cluster == nil {
 		cluster = ipfs.NewCluster([]string{cfg.IPFS.LocalURL})
@@ -75,6 +81,7 @@ func NewHandler(cfg *config.Config) *Handler {
 		variantOverrides: variantOverrides,
 		imageProcessor:   imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
 		mediaAccess:      newMediaAccessResolver(cfg.MediaAccess),
+		mediaGrants:      grants,
 		uploads:          newUploadBudget(cfg.Upload.DailyBytesPerSession),
 	}
 
@@ -602,6 +609,13 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	if err := validateCID(cid); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	if h.mediaGrants != nil {
+		err := h.mediaGrants.state.Revoke(r.Context(), mediagrant.FileResource(cid))
+		if err != nil {
+			writeMediaAccessError(w, err)
+			return
+		}
 	}
 
 	// Добавляем в unpin-список (soft-delete)
