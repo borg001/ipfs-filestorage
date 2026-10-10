@@ -66,6 +66,34 @@ const MaxDecodePixels = 100_000_000
 // ErrImageTooLarge is a picture whose dimensions exceed MaxDecodePixels.
 var ErrImageTooLarge = fmt.Errorf("image dimensions exceed %d pixels", MaxDecodePixels)
 
+// FitPreview keeps the complete photograph while limiting its longest side.
+// It is used for feed display; opening the photograph still requests original.
+func (p *Processor) FitPreview(ctx context.Context, data []byte, maxSide int) ([]byte, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > MaxDecodePixels {
+		return nil, ErrImageTooLarge
+	}
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	return p.encode(ctx, fitInside(src, maxSide), "jpeg")
+}
+
+func fitInside(src image.Image, maxSide int) image.Image {
+	bounds := src.Bounds()
+	scale := math.Min(1, float64(maxSide)/float64(max(bounds.Dx(), bounds.Dy())))
+	width := max(1, int(math.Round(float64(bounds.Dx())*scale)))
+	height := max(1, int(math.Round(float64(bounds.Dy())*scale)))
+	dst := image.NewNRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, bounds, xdraw.Over, nil)
+	return dst
+}
+
 func (p *Processor) Process(ctx context.Context, data []byte, contentType string) (Result, error) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -98,6 +126,19 @@ func (p *Processor) Process(ctx context.Context, data []byte, contentType string
 
 	for _, variantCfg := range p.cfg.Variants {
 		if variantCfg.Width <= 0 || variantCfg.Height <= 0 {
+			continue
+		}
+		if variantCfg.Mode == "fit" {
+			resized := fitInside(src, variantCfg.Width)
+			encoded, err := p.encode(ctx, resized, "jpeg")
+			if err != nil {
+				return result, fmt.Errorf("encode image variant %s: %w", variantCfg.Key, err)
+			}
+			result.Variants = append(result.Variants, Variant{
+				Key: variantCfg.Key, Filename: variantCfg.Key + ".jpg", Data: encoded,
+				Format: "jpeg", ContentType: "image/jpeg",
+				Width: resized.Bounds().Dx(), Height: resized.Bounds().Dy(),
+			})
 			continue
 		}
 		resized := resize(src, variantCfg.Width, variantCfg.Height, p.cfg.ResizePolicy, outputFormat == "jpeg")

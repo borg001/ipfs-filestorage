@@ -17,6 +17,7 @@ func TestLoadDefaults(t *testing.T) {
 		"VIDEO_ASPECT_RATIO_TOLERANCE", "VIDEO_SEGMENT_DURATION_SEC",
 		"VIDEO_BITRATES", "FFMPEG_PATH", "FFPROBE_PATH", "VIDEO_TEMP_DIR",
 		"IMAGE_BLUR_RADIUS", "IMAGE_FACE_BLUR_RADIUS", "IMAGE_FACE_DETECTION_MAX_DIMENSION",
+		"IMAGE_VARIANTS", "IMAGE_RESIZE_POLICY",
 		"IMAGE_FACE_DETECTION_SCORE_THRESHOLD", "IMAGE_FACE_DETECTION_NMS_THRESHOLD",
 		"MEDIA_ACCESS_URL", "MEDIA_LINK_ACCESS_URL", "MEDIA_ACCESS_TIMEOUT_MS",
 	}
@@ -61,6 +62,21 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.MediaAccess.URL != "" || cfg.MediaAccess.LinkURL != "" || cfg.MediaAccess.TimeoutMs != 2500 {
 		t.Errorf("Default MediaAccess = %+v, want disabled with 2500ms timeout", cfg.MediaAccess)
+	}
+}
+
+func TestImageVariantsCanMixCroppedAndWholeSizes(t *testing.T) {
+	t.Setenv("IMAGE_VARIANTS", "100x100,480x640,fit_480,fit_1024")
+	got := Load().Image.Variants
+	if len(got) != 4 {
+		t.Fatalf("variants = %+v", got)
+	}
+	if got[1] != (ImageVariant{Key: "480x640", Width: 480, Height: 640}) {
+		t.Fatalf("cropped variant = %+v", got[1])
+	}
+	if got[2] != (ImageVariant{Key: "fit_480", Width: 480, Height: 480, Mode: "fit"}) ||
+		got[3] != (ImageVariant{Key: "fit_1024", Width: 1024, Height: 1024, Mode: "fit"}) {
+		t.Fatalf("whole variants = %+v", got[2:])
 	}
 }
 
