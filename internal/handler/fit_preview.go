@@ -12,13 +12,23 @@ import (
 
 const fitPreviewMaxSource = 100 << 20
 
-var fitPreviewSizes = map[string]int{"fit_480": 480, "fit_1024": 1024}
+func (h *Handler) fitPreviewSize(variant string) (int, bool) {
+	if h.cfg == nil || !h.cfg.Image.ProcessingEnabled {
+		return 0, false
+	}
+	for _, item := range h.cfg.Image.Variants {
+		if item.Key == variant && item.Mode == "fit" && item.Width > 0 && item.Width == item.Height {
+			return item.Width, true
+		}
+	}
+	return 0, false
+}
 
 // ensureFitPreview generates a rendition once for both existing and new
 // bundles. The IPFS CID is persisted on the instance's data volume, alongside
 // the existing variant overrides, so restarts do not trigger recomputation.
 func (h *Handler) ensureFitPreview(ctx context.Context, cid string, manifest bundle.Manifest, variant, sourceVariant string) (string, error) {
-	maxSide, ok := fitPreviewSizes[variant]
+	maxSide, ok := h.fitPreviewSize(variant)
 	if !ok {
 		return "", fmt.Errorf("unsupported fit preview %q", variant)
 	}

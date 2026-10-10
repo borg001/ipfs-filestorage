@@ -18,7 +18,7 @@ import (
 )
 
 func TestFitPreviewExistingBundleIsPersistedAndOriginalStaysAvailable(t *testing.T) {
-	h := setupTestHandler(&config.Config{Image: config.ImageConfig{JPEGQuality: 82}})
+	h := setupTestHandler(&config.Config{Image: config.ImageConfig{ProcessingEnabled: true, JPEGQuality: 82}})
 	overrides, err := store.NewVariantOverrides(filepath.Join(t.TempDir(), "variants.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +37,11 @@ func TestFitPreviewExistingBundleIsPersistedAndOriginalStaysAvailable(t *testing
 	manifest, err := h.buildFileBundle(context.Background(), "photo.jpg", input.Bytes(), "image/jpeg")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Этот bundle был загружен до появления новых вариантов в настройках.
+	h.cfg.Image.Variants = []config.ImageVariant{
+		{Key: "fit_480", Width: 480, Height: 480, Mode: "fit"},
+		{Key: "fit_1024", Width: 1024, Height: 1024, Mode: "fit"},
 	}
 	path := "/file/" + manifest.CID
 	for _, suffix := range []string{"/fit_480", "/fit_1024", "/fit_1024", ""} {
@@ -60,10 +65,48 @@ func TestFitPreviewExistingBundleIsPersistedAndOriginalStaysAvailable(t *testing
 			t.Fatalf("fit preview dimensions = %dx%d", width, height)
 		}
 	}
-	for variant := range fitPreviewSizes {
+	for _, variant := range []string{"fit_480", "fit_1024"} {
 		if _, ok := overrides.Get(store.VariantOverrideKey(manifest.CID, variant)); !ok {
 			t.Fatalf("%s preview was not persisted", variant)
 		}
+	}
+}
+
+func TestConfiguredFitPreviewIsBuiltAtUpload(t *testing.T) {
+	h := setupTestHandler(&config.Config{Image: config.ImageConfig{
+		ProcessingEnabled: true, JPEGQuality: 82, ResizePolicy: "smart-cover",
+		Variants: []config.ImageVariant{
+			{Key: "480x640", Width: 480, Height: 640},
+			{Key: "fit_480", Width: 480, Height: 480, Mode: "fit"},
+		},
+	}})
+	overrides, err := store.NewVariantOverrides(filepath.Join(t.TempDir(), "variants.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.variantOverrides = overrides
+	src := image.NewRGBA(image.Rect(0, 0, 1200, 600))
+	var input bytes.Buffer
+	if err := jpeg.Encode(&input, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := h.buildFileBundle(context.Background(), "photo.jpg", input.Bytes(), "image/jpeg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.Variants["fit_480"]; got.Width != 480 || got.Height != 240 {
+		t.Fatalf("configured fit dimensions = %dx%d", got.Width, got.Height)
+	}
+	if got := manifest.Variants["480x640"]; got.Width != 480 || got.Height != 640 {
+		t.Fatalf("configured cover dimensions = %dx%d", got.Width, got.Height)
+	}
+	w := httptest.NewRecorder()
+	h.HandleFile(w, httptest.NewRequest(http.MethodGet, "/file/"+manifest.CID+"/fit_480", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("fit response = %d %s", w.Code, w.Body.String())
+	}
+	if _, ok := overrides.Get(store.VariantOverrideKey(manifest.CID, "fit_480")); ok {
+		t.Fatal("configured bundle variant was needlessly regenerated")
 	}
 }
 
@@ -71,7 +114,10 @@ func TestProtectedFitPreviewUsesCurrentMask(t *testing.T) {
 	cid := testCID("ProtectedFit")
 	policy := policyServer(t, cid, []map[string]interface{}{{"delivery_mode": "blur_faces"}})
 	defer policy.Close()
-	h := setupTestHandler(&config.Config{Image: config.ImageConfig{JPEGQuality: 82}})
+	h := setupTestHandler(&config.Config{Image: config.ImageConfig{
+		ProcessingEnabled: true, JPEGQuality: 82,
+		Variants: []config.ImageVariant{{Key: "fit_480", Width: 480, Height: 480, Mode: "fit"}},
+	}})
 	h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
 	overrides, err := store.NewVariantOverrides(filepath.Join(t.TempDir(), "variants.json"))
 	if err != nil {

@@ -46,18 +46,19 @@ type APIConfig struct {
 }
 
 type UploadConfig struct {
-	MaxFileSize       int64
+	MaxFileSize int64
 	// DailyBytesPerSession bounds what one session uploads a day on one
 	// instance; 0 turns the bound off.
 	DailyBytesPerSession int64
-	AllowedExtensions []string
-	AllowedMimeTypes  map[string]bool
+	AllowedExtensions    []string
+	AllowedMimeTypes     map[string]bool
 }
 
 type ImageVariant struct {
 	Key    string `json:"key"`
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
+	Mode   string `json:"mode,omitempty"`
 }
 
 const (
@@ -223,13 +224,13 @@ func Load() *Config {
 		// No HTML or SVG: storage is served from the app's origin, and such a
 		// file runs script there.
 		Upload: UploadConfig{
-			MaxFileSize:       getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
+			MaxFileSize:          getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
 			DailyBytesPerSession: getEnvInt64("UPLOAD_DAILY_BYTES_PER_SESSION", 4*1024*1024*1024),
-			AllowedExtensions: getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "jpg", "jpeg", "webp", "heic", "heif", "pdf", "doc", "docx", "zip", "json", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
+			AllowedExtensions:    getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "jpg", "jpeg", "webp", "heic", "heif", "pdf", "doc", "docx", "zip", "json", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
 			AllowedMimeTypes: map[string]bool{
-				"image/png":     true,
-				"image/jpeg":    true,
-				"image/webp":    true,
+				"image/png":  true,
+				"image/jpeg": true,
+				"image/webp": true,
 				// A phone shooting in "High Efficiency" uploads HEIC. It is
 				// converted to JPEG at ingest, so nothing downstream has to
 				// know the format.
@@ -261,6 +262,8 @@ func Load() *Config {
 				{Key: "640x640", Width: 640, Height: 640},
 				{Key: "768x1024", Width: 768, Height: 1024},
 				{Key: "1024x1024", Width: 1024, Height: 1024},
+				{Key: "fit_480", Width: 480, Height: 480, Mode: "fit"},
+				{Key: "fit_1024", Width: 1024, Height: 1024, Mode: "fit"},
 			}),
 			OutputFormat:    validateChoice(getEnv("IMAGE_OUTPUT_FORMAT", "auto"), []string{"auto", "jpeg", "webp"}, "auto"),
 			JPEGProgressive: getEnvBool("IMAGE_JPEG_PROGRESSIVE", true),
@@ -376,7 +379,16 @@ func getEnvImageVariants(key string, def []ImageVariant) []ImageVariant {
 	}
 	var variants []ImageVariant
 	for _, part := range parts {
-		wh := strings.Split(strings.ToLower(strings.TrimSpace(part)), "x")
+		part = strings.ToLower(strings.TrimSpace(part))
+		if strings.HasPrefix(part, "fit_") {
+			side, err := strconv.Atoi(strings.TrimPrefix(part, "fit_"))
+			if err != nil || side <= 0 {
+				return def
+			}
+			variants = append(variants, ImageVariant{Key: fmt.Sprintf("fit_%d", side), Width: side, Height: side, Mode: "fit"})
+			continue
+		}
+		wh := strings.Split(part, "x")
 		if len(wh) != 2 {
 			return def
 		}

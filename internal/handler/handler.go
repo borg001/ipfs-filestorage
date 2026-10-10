@@ -530,7 +530,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	// policy's stronger mask even when the URL asks for a weaker one.
 	requestedMask := ""
 	if len(parts) == 2 {
-		if _, ok := fitPreviewSizes[parts[0]]; !ok || (parts[1] != config.PrivacyBlurVariantKey && parts[1] != config.PrivacyFaceBlurVariantKey) {
+		if _, ok := h.fitPreviewSize(parts[0]); !ok || (parts[1] != config.PrivacyBlurVariantKey && parts[1] != config.PrivacyFaceBlurVariantKey) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 			return
 		}
@@ -540,30 +540,35 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}
-	if _, fitPreview := fitPreviewSizes[variantKey]; fitPreview {
+	if _, fitPreview := h.fitPreviewSize(variantKey); fitPreview {
 		sourceVariant := requestedMask
 		if decision.Managed && decision.Mode != mediaDeliveryOriginal {
 			if decision.Mode == mediaDeliveryBlur || sourceVariant != config.PrivacyBlurVariantKey {
 				sourceVariant = string(decision.Mode)
 			}
 		}
-		previewCID, err := h.ensureFitPreview(ctx, cid, manifest, variantKey, sourceVariant)
-		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
+		// Новые загрузки уже содержат настроенный fit-вариант в bundle.
+		// Для старых фото и приватных масок вариант создаётся при запросе.
+		_, ready := manifest.Variants[variantKey]
+		if sourceVariant != "" || !ready {
+			previewCID, err := h.ensureFitPreview(ctx, cid, manifest, variantKey, sourceVariant)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
+				return
+			}
+			reader, err := h.cluster.ClusterTryFetch(ctx, previewCID)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
+				return
+			}
+			defer reader.Close()
+			w.Header().Set("Content-Type", "image/jpeg")
+			setUserFileHeaders(w, "image/jpeg")
+			w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
+			w.WriteHeader(http.StatusOK)
+			io.Copy(w, reader)
 			return
 		}
-		reader, err := h.cluster.ClusterTryFetch(ctx, previewCID)
-		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
-			return
-		}
-		defer reader.Close()
-		w.Header().Set("Content-Type", "image/jpeg")
-		setUserFileHeaders(w, "image/jpeg")
-		w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
-		w.WriteHeader(http.StatusOK)
-		io.Copy(w, reader)
-		return
 	}
 	if decision.Managed && decision.Mode != mediaDeliveryOriginal {
 		variantKey = string(decision.Mode)
