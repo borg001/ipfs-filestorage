@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 
@@ -15,6 +17,20 @@ import (
 
 func main() {
 	fmt.Println("ipfs-filestorage starting...")
+	// Opt-in, reachable only in this container's network namespace. Never
+	// register diagnostic handlers in the public file router.
+	if os.Getenv("IAMFREE_DIAGNOSTICS") == "1" {
+		listener, err := net.Listen("tcp", "127.0.0.1:6062")
+		if err != nil {
+			log.Fatal(err)
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		for _, name := range []string{"heap", "allocs", "goroutine"} {
+			mux.Handle("/debug/pprof/"+name, pprof.Handler(name))
+		}
+		go func() { _ = http.Serve(listener, mux) }()
+	}
 
 	cfg := config.Load()
 	handlers := handler.NewHandler(cfg)
