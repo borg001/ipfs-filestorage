@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -39,7 +40,13 @@ func New(url string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid ipfs url %q: %w", url, err)
 	}
-	api, err := rpc.NewApi(ma)
+	// Kubo's NewApi disables keep-alive by default. Each manifest and image
+	// read then reconnects to IPFS. Retain a bounded idle pool instead;
+	// request contexts continue to control cancellation and streaming.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	api, err := rpc.NewApiWithClient(ma, &http.Client{Transport: transport})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ipfs rpc client: %w", err)
 	}

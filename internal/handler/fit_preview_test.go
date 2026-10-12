@@ -9,8 +9,11 @@ import (
 	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/borg001/ipfs-filestorage/internal/bundle"
 	"github.com/borg001/ipfs-filestorage/internal/config"
@@ -19,7 +22,8 @@ import (
 
 func TestFitPreviewExistingBundleIsPersistedAndOriginalStaysAvailable(t *testing.T) {
 	h := setupTestHandler(&config.Config{Image: config.ImageConfig{ProcessingEnabled: true, JPEGQuality: 82}})
-	overrides, err := store.NewVariantOverrides(filepath.Join(t.TempDir(), "variants.json"))
+	overridesPath := filepath.Join(t.TempDir(), "variants.json")
+	overrides, err := store.NewVariantOverrides(overridesPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +69,17 @@ func TestFitPreviewExistingBundleIsPersistedAndOriginalStaysAvailable(t *testing
 			t.Fatalf("fit preview dimensions = %dx%d", width, height)
 		}
 	}
-	for _, variant := range []string{"fit_480", "fit_1024"} {
-		if _, ok := overrides.Get(store.VariantOverrideKey(manifest.CID, variant)); !ok {
-			t.Fatalf("%s preview was not persisted", variant)
-		}
+	// Reload the persisted map and make the original unavailable. A repeated
+	// request must still return the cached preview after a handler restart.
+	h.variantOverrides, err = store.NewVariantOverrides(overridesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(h.cluster.(*mockCluster).dirs[manifest.CID], bundle.OriginalFilename)
+	w := httptest.NewRecorder()
+	h.HandleFile(w, httptest.NewRequest("GET", path+"/fit_480", nil))
+	if w.Code != 200 {
+		t.Fatalf("persisted preview: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -116,7 +127,11 @@ func TestProtectedFitPreviewUsesCurrentMask(t *testing.T) {
 	defer policy.Close()
 	h := setupTestHandler(&config.Config{Image: config.ImageConfig{
 		ProcessingEnabled: true, JPEGQuality: 82,
-		Variants: []config.ImageVariant{{Key: "fit_480", Width: 480, Height: 480, Mode: "fit"}},
+		Variants: []config.ImageVariant{
+			{Key: "fit_480", Width: 480, Height: 480, Mode: "fit"},
+			{Key: "100x100", Width: 100, Height: 100},
+			{Key: "480x640", Width: 480, Height: 640},
+		},
 	}})
 	h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
 	overrides, err := store.NewVariantOverrides(filepath.Join(t.TempDir(), "variants.json"))
@@ -162,15 +177,25 @@ func TestProtectedFitPreviewUsesCurrentMask(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if img.Bounds().Dx() != 480 || img.Bounds().Dy() != 240 {
+		width, height := 480, 240
+		if strings.HasPrefix(path, "/100x100") {
+			width, height = 100, 100
+		}
+		if strings.HasPrefix(path, "/480x640") {
+			width, height = 480, 640
+		}
+		if img.Bounds().Dx() != width || img.Bounds().Dy() != height {
 			t.Fatalf("%s dimensions: %v", path, img.Bounds())
 		}
-		r, g, b, _ := img.At(240, 120).RGBA()
+		r, g, b, _ := img.At(width/2, height/2).RGBA()
 		if expected.R > 0 && r < 40000 || expected.G > 0 && g < 40000 || expected.B > 0 && b < 40000 {
 			t.Fatalf("%s returned wrong mask color: %d,%d,%d", path, r, g, b)
 		}
 	}
 	check("/fit_480", color.RGBA{G: 220})
+	check("/100x100", color.RGBA{G: 220})
+	check("/480x640", color.RGBA{G: 220})
+	check("/100x100/blur", color.RGBA{B: 220})
 	check("/fit_480/blur", color.RGBA{B: 220})
 	added, err := cluster.ClusterAdd(context.Background(), "blur_faces.jpg", bytes.NewReader(encodeColor(color.RGBA{R: 220, G: 220, A: 255})))
 	if err != nil {
@@ -180,4 +205,34 @@ func TestProtectedFitPreviewUsesCurrentMask(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("/fit_480", color.RGBA{R: 220, G: 220})
+	check("/100x100", color.RGBA{R: 220, G: 220})
+	// Signed-link downloads use the same resizing of authorized mask bytes.
+	granted, codec, claim, state := grantTestHandler(t)
+	h.mediaGrants = granted.mediaGrants
+	claim.SourceCID = cid
+	claim.Mode = "blur"
+	grant, err := codec.Seal(claim, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.HandleFileLink(w, httptest.NewRequest("GET", "/file/link/55/100x100/blur_faces?token=session&grant="+url.QueryEscape(grant), nil))
+	if w.Code != 200 {
+		t.Fatalf("grant crop: %d %s", w.Code, w.Body.String())
+	}
+	img, err := jpeg.Decode(bytes.NewReader(w.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Dx() != 100 || img.Bounds().Dy() != 100 {
+		t.Fatal(img.Bounds())
+	}
+	red, green, blue, _ := img.At(50, 50).RGBA()
+	if blue < 40000 || red > 10000 || green > 10000 {
+		t.Fatal("grant weakened the required full blur")
+	}
+	if state.checks != 1 || w.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatal("grant revoke/cache contract changed")
+	}
+
 }

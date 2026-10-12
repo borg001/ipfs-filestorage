@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // ClusterManager управляет репликацией файлов по всем нодам IPFS-кластера.
 type ClusterManager struct {
-	nodes []*ClusterNode
+	nodes    []*ClusterNode
+	readNext atomic.Uint64
 }
 
 // ClusterNode — одна нода в кластере
@@ -285,7 +287,9 @@ func (cm *ClusterManager) ClusterTryFetch(ctx context.Context, cid string) (io.R
 	if len(cm.nodes) == 0 {
 		return nil, fmt.Errorf("no IPFS nodes in cluster")
 	}
-	for _, node := range cm.nodes {
+	start := int((cm.readNext.Add(1) - 1) % uint64(len(cm.nodes)))
+	for offset := range cm.nodes {
+		node := cm.nodes[(start+offset)%len(cm.nodes)]
 		r, err := node.Cat(ctx, cid)
 		if err == nil {
 			return r, nil
@@ -299,7 +303,9 @@ func (cm *ClusterManager) ClusterTryFetchPath(ctx context.Context, cid string, f
 	if len(cm.nodes) == 0 {
 		return nil, fmt.Errorf("no IPFS nodes in cluster")
 	}
-	for _, node := range cm.nodes {
+	start := int((cm.readNext.Add(1) - 1) % uint64(len(cm.nodes)))
+	for offset := range cm.nodes {
+		node := cm.nodes[(start+offset)%len(cm.nodes)]
 		r, err := node.CatPath(ctx, cid, filePath)
 		if err == nil {
 			return r, nil
