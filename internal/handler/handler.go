@@ -439,6 +439,12 @@ func (h *Handler) readManifest(ctx context.Context, cid string) (bundle.Manifest
 	if err := json.NewDecoder(reader).Decode(&manifest); err != nil {
 		return bundle.Manifest{}, err
 	}
+	// Decode can stop before the last HTTP chunk/trailers. Closing Kubo's
+	// reader then cancels the stream and discards an otherwise reusable TCP
+	// connection. Consume EOF, including any IPFS trailer error, first.
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		return bundle.Manifest{}, err
+	}
 	manifest.Finalize(cid)
 	return manifest, nil
 }
