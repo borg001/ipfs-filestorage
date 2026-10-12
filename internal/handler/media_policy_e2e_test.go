@@ -43,7 +43,9 @@ func TestMediaAgainstRealPolicy(t *testing.T) {
 		{"private viewer", "/file/link/1", "viewer-token", "Private-blur", 200},
 		{"private owner", "/file/link/1", "owner-token", "Private-original", 200},
 		{"CID same rules", "/file/" + testCID("Private"), "viewer-token", "Private-blur", 200},
-		{"foreign public link", "/file/" + testCID("Private") + "?media_link=2", "viewer-token", "", 403},
+		// A foreign link is discarded; the actual CID's policy permits only
+		// the blurred rendition, never the foreign link's original decision.
+		{"foreign public link", "/file/" + testCID("Private") + "?media_link=2", "viewer-token", "Private-blur", 200},
 		{"foreign bundle", "/file/" + testCID("Private") + "/bundle?media_link=2", "viewer-token", "", 403},
 		{"verification link viewer", "/stream/link/3/master.m3u8", "viewer-token", "", 403},
 		{"verification CID viewer", "/stream/" + testCID("Verify") + "/master.m3u8", "viewer-token", "", 403},
