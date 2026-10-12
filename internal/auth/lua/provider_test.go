@@ -2,9 +2,84 @@ package lua
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
+
+func TestProviderCompiledScriptIsolationAndRevocation(t *testing.T) {
+	var calls atomic.Int64
+	var revoked atomic.Bool
+	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if revoked.Load() {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprint(w, `{"id":1}`)
+	}))
+	defer auth.Close()
+	provider := NewProvider(`
+local request = require("request")
+local env = require("env")
+local json = require("json")
+counter = (counter or 0) + 1
+function authorize(req)
+  if counter ~= 1 then return false end
+  local response = request.get(env.get("AUTH_SERVICE_URL") .. "/auth/me", {})
+  return response.status == 200 and json.decode(response.body).id == 1
+end`, 3000, map[string]string{"AUTH_SERVICE_URL": auth.URL})
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := provider.Authorize(context.Background(), httptest.NewRequest("GET", "/file/example", nil))
+			if !ok || err != nil {
+				t.Errorf("isolated authorization: %v %v", ok, err)
+			}
+		}()
+	}
+	wg.Wait()
+	revoked.Store(true)
+	ok, err := provider.Authorize(context.Background(), httptest.NewRequest("GET", "/file/example", nil))
+	if ok || err != nil || calls.Load() != 33 {
+		t.Fatalf("authorization must execute on every request, including revocation: %v %v calls=%d", ok, err, calls.Load())
+	}
+}
+
+func TestProviderRegistryGrowsForLargerScripts(t *testing.T) {
+	script := `function count(n)
+  if n == 0 then return 0 end
+  local a,b,c,d,e = 1,1,1,1,1
+  return a+b+c+d+e+count(n-1)
+end
+function authorize(req) return count(100) == 500 end`
+	ok, err := NewProvider(script, 3000, nil).Authorize(context.Background(), httptest.NewRequest("GET", "/", nil))
+	if !ok || err != nil {
+		t.Fatalf("growing registry: %v %v", ok, err)
+	}
+}
+
+func BenchmarkProviderAuthorize(b *testing.B) {
+	p := NewProvider(`local json = require("json")
+function authorize(req)
+ local value = json.decode('{"active":true}')
+ return value.active and req.headers["Authorization"] == "Bearer fixture"
+end`, 3000, nil)
+	r := httptest.NewRequest("GET", "/file/link/1/100x100", nil)
+	r.Header.Set("Authorization", "Bearer fixture")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if ok, err := p.Authorize(context.Background(), r); !ok || err != nil {
+			b.Fatal(ok, err)
+		}
+	}
+}
 
 func TestProvider_Disabled(t *testing.T) {
 	p := NewProvider("", 0, nil)

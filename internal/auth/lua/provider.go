@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
+	"github.com/yuin/gopher-lua/parse"
 )
 
 // Provider executes a sandboxed Lua script to validate requests.
@@ -17,6 +19,8 @@ type Provider struct {
 	timeoutMs    int
 	envWhitelist map[string]string
 	httpClient   *http.Client
+	proto        *lua.FunctionProto
+	compileErr   error
 }
 
 // NewProvider creates a new Lua auth provider.
@@ -36,7 +40,7 @@ func NewProvider(script string, timeoutMs int, args ...interface{}) *Provider {
 			envWhitelist = whitelist
 		}
 	}
-	return &Provider{
+	p := &Provider{
 		script:       script,
 		timeoutMs:    timeoutMs,
 		envWhitelist: envWhitelist,
@@ -44,6 +48,14 @@ func NewProvider(script string, timeoutMs int, args ...interface{}) *Provider {
 			Timeout: time.Duration(timeoutMs) * time.Millisecond,
 		},
 	}
+	if script != "" {
+		chunk, err := parse.Parse(strings.NewReader(script), "auth.lua")
+		if err == nil {
+			p.proto, err = lua.Compile(chunk, "auth.lua")
+		}
+		p.compileErr = err
+	}
+	return p
 }
 
 // Enabled returns true when a Lua script is configured.
@@ -59,6 +71,9 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	if !p.Enabled() {
 		return false, nil
 	}
+	if p.compileErr != nil {
+		return false, fmt.Errorf("lua script error: %w", p.compileErr)
+	}
 
 	timeout := time.Duration(p.timeoutMs) * time.Millisecond
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -66,6 +81,12 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 
 	L := lua.NewState(lua.Options{
 		SkipOpenLibs: true,
+		// Keep the previous maximum stack capacity while avoiding the full
+		// allocation for every small authorization script. Each request still
+		// receives a fresh VM: globals and request data cannot cross sessions.
+		RegistrySize:        256,
+		RegistryMaxSize:     lua.RegistrySize,
+		MinimizeStackMemory: true,
 	})
 	defer L.Close()
 
@@ -111,7 +132,8 @@ func (p *Provider) Authorize(ctx context.Context, r *http.Request) (bool, error)
 	L.SetField(loaded, "env", L.GetGlobal("env"))
 
 	// Execute the script (defines authorize function)
-	if err := L.DoString(p.script); err != nil {
+	L.Push(L.NewFunctionFromProto(p.proto))
+	if err := L.PCall(0, lua.MultRet, nil); err != nil {
 		log.Printf("[AUTH-LUA] Script parse error: %v", err)
 		return false, fmt.Errorf("lua script error: %w", err)
 	}
