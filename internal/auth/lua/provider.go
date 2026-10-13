@@ -40,12 +40,18 @@ func NewProvider(script string, timeoutMs int, args ...interface{}) *Provider {
 			envWhitelist = whitelist
 		}
 	}
+	// Media arrives in parallel bursts. Keep their auth connections reusable
+	// without caching authorization decisions or sharing Lua request state.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
 	p := &Provider{
 		script:       script,
 		timeoutMs:    timeoutMs,
 		envWhitelist: envWhitelist,
 		httpClient: &http.Client{
-			Timeout: time.Duration(timeoutMs) * time.Millisecond,
+			Timeout:   time.Duration(timeoutMs) * time.Millisecond,
+			Transport: transport,
 		},
 	}
 	if script != "" {

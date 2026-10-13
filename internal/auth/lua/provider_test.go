@@ -3,11 +3,13 @@ package lua
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestProviderCompiledScriptIsolationAndRevocation(t *testing.T) {
@@ -300,4 +302,79 @@ func TestProvider_SyntaxError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for syntax error")
 	}
+}
+
+func TestProviderReusesConnectionsAcrossConcurrentBursts(t *testing.T) {
+	const parallel = 16
+	var connections atomic.Int64
+	entered := make(chan struct{}, parallel)
+	release := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	var round atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		index := round.Load()
+		entered <- struct{}{}
+		<-release[index]
+		fmt.Fprint(w, `{"id":1}`)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+	provider := NewProvider(`local request=require("request"); local env=require("env"); function authorize(req) local r=request.get(env.get("AUTH_SERVICE_URL"),{}); return r and r.status==200 end`, 3000, map[string]string{"AUTH_SERVICE_URL": server.URL})
+	for phase := 0; phase < 2; phase++ {
+		round.Store(int32(phase))
+		var wg sync.WaitGroup
+		for i := 0; i < parallel; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ok, err := provider.Authorize(context.Background(), httptest.NewRequest("GET", "/file/example", nil))
+				if !ok || err != nil {
+					t.Errorf("authorize: %v %v", ok, err)
+				}
+			}()
+		}
+		timeout := time.NewTimer(2 * time.Second)
+		arrived := 0
+	wait:
+		for arrived < parallel {
+			select {
+			case <-entered:
+				arrived++
+			case <-timeout.C:
+				break wait
+			}
+		}
+		timeout.Stop()
+		close(release[phase])
+		wg.Wait()
+		if arrived != parallel {
+			t.Fatalf("only %d requests reached auth", arrived)
+		}
+	}
+	if got := connections.Load(); got > parallel+2 {
+		t.Fatalf("auth connections not reused: %d for two %d-request bursts", got, parallel)
+	}
+}
+
+func TestProviderCancelsAuthHTTPWithCaller(t *testing.T) {
+	entered, stopped := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(entered); <-r.Context().Done(); close(stopped) }))
+	defer server.Close()
+	provider := NewProvider(`local request=require("request"); local env=require("env"); function authorize(req) local r=request.get(env.get("AUTH_SERVICE_URL"),{}); return r and r.status==200 end`, 3000, map[string]string{"AUTH_SERVICE_URL": server.URL})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { provider.Authorize(ctx, httptest.NewRequest("GET", "/file/example", nil)); close(done) }()
+	<-entered
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Error("upstream HTTP outlived canceled caller")
+	}
+	<-done
 }

@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -39,7 +40,7 @@ func (p *Provider) registerRequestLib(L *lua.LState) {
 				return 0
 			}
 
-			resp, err := p.doRequest(method, rawURL, opts)
+			resp, err := p.doRequest(L.Context(), method, rawURL, opts)
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
@@ -133,8 +134,8 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-func (p *Provider) doRequest(method, rawURL string, opts *lua.LTable) (*http.Response, error) {
-	req, err := http.NewRequest(method, rawURL, nil)
+func (p *Provider) doRequest(ctx context.Context, method, rawURL string, opts *lua.LTable) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %w", err)
 	}
