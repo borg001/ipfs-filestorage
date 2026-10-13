@@ -53,6 +53,7 @@ type Handler struct {
 	uploads          *uploadBudget
 	fitPreviewGroup  singleflight.Group
 	manifests        *manifestCache
+	files            *fileCache
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -76,10 +77,15 @@ func NewHandler(cfg *config.Config) *Handler {
 	if err != nil {
 		log.Printf("[STORAGE] variant overrides unavailable: %v", err)
 	}
+	files, err := newFileCache(filepath.Join(filepath.Dir(cfg.Unpin.StorePath), "file-cache"), cfg.IPFS.FileCacheBytes)
+	if err != nil {
+		log.Printf("[STORAGE] file cache unavailable: %v", err)
+	}
 
 	h := &Handler{
 		cfg:              cfg,
 		manifests:        newManifestCache(cfg.IPFS.ManifestCacheBytes),
+		files:            files,
 		cluster:          cluster,
 		unpinStore:       unpinStore,
 		variantOverrides: variantOverrides,
@@ -568,7 +574,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Configured preview is unavailable"})
 				return
 			}
-			reader, err := h.cluster.ClusterTryFetch(ctx, previewCID)
+			reader, err := h.readFile(ctx, previewCID, "")
 			if err != nil {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Configured preview is unavailable"})
 				return
@@ -604,10 +610,10 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	// one; if its file cannot be read, the bundled one still can.
 	var reader io.ReadCloser
 	if replacement != "" {
-		reader, err = h.cluster.ClusterTryFetch(ctx, replacement)
+		reader, err = h.readFile(ctx, replacement, "")
 	}
 	if replacement == "" || err != nil {
-		reader, err = h.cluster.ClusterTryFetchPath(ctx, cid, bundlePath)
+		reader, err = h.readFile(ctx, cid, bundlePath)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
@@ -698,5 +704,14 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "deleted",
 		"cid":    cid,
+	})
+}
+
+func (h *Handler) readFile(ctx context.Context, cid, path string) (io.ReadCloser, error) {
+	return h.files.open(ctx, cid+"/"+path, func() (io.ReadCloser, error) {
+		if path == "" {
+			return h.cluster.ClusterTryFetch(ctx, cid)
+		}
+		return h.cluster.ClusterTryFetchPath(ctx, cid, path)
 	})
 }
