@@ -39,6 +39,8 @@ type IPFSConfig struct {
 	LocalURL string
 	// URLs всех нод кластера (включая локальную) для репликации
 	ClusterNodes []string
+	// Budget for decoded immutable bundle manifests; zero disables caching.
+	ManifestCacheBytes int
 }
 
 type APIConfig struct {
@@ -215,8 +217,9 @@ func Load() *Config {
 			Port: getEnv("SERVER_PORT", "3000"),
 		},
 		IPFS: IPFSConfig{
-			LocalURL:     getEnv("IPFS_URL", "http://localhost:5001"),
-			ClusterNodes: getEnvSlice("CLUSTER_NODES", []string{"http://localhost:5001"}),
+			LocalURL:           getEnv("IPFS_URL", "http://localhost:5001"),
+			ClusterNodes:       getEnvSlice("CLUSTER_NODES", []string{"http://localhost:5001"}),
+			ManifestCacheBytes: getEnvInt("IPFS_MANIFEST_CACHE_BYTES", 8<<20),
 		},
 		API: APIConfig{
 			Keys: getEnvSlice("API_KEYS", []string{}),

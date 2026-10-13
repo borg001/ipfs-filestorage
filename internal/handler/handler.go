@@ -52,6 +52,7 @@ type Handler struct {
 	mediaGrants      *mediaGrantVerifier
 	uploads          *uploadBudget
 	fitPreviewGroup  singleflight.Group
+	manifests        *manifestCache
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -78,6 +79,7 @@ func NewHandler(cfg *config.Config) *Handler {
 
 	h := &Handler{
 		cfg:              cfg,
+		manifests:        newManifestCache(cfg.IPFS.ManifestCacheBytes),
 		cluster:          cluster,
 		unpinStore:       unpinStore,
 		variantOverrides: variantOverrides,
@@ -430,6 +432,10 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) readManifest(ctx context.Context, cid string) (bundle.Manifest, error) {
+	return h.manifests.load(ctx, cid, func(ctx context.Context) (bundle.Manifest, error) { return h.fetchManifest(ctx, cid) })
+}
+
+func (h *Handler) fetchManifest(ctx context.Context, cid string) (bundle.Manifest, error) {
 	reader, err := h.cluster.ClusterTryFetchPath(ctx, cid, bundle.ManifestFilename)
 	if err != nil {
 		return bundle.Manifest{}, err
@@ -437,6 +443,12 @@ func (h *Handler) readManifest(ctx context.Context, cid string) (bundle.Manifest
 	defer reader.Close()
 	var manifest bundle.Manifest
 	if err := json.NewDecoder(reader).Decode(&manifest); err != nil {
+		return bundle.Manifest{}, err
+	}
+	// Decode can stop before the last HTTP chunk/trailers. Closing Kubo's
+	// reader then cancels the stream and discards an otherwise reusable TCP
+	// connection. Consume EOF, including any IPFS trailer error, first.
+	if _, err := io.Copy(io.Discard, reader); err != nil {
 		return bundle.Manifest{}, err
 	}
 	manifest.Finalize(cid)
@@ -530,7 +542,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	// policy's stronger mask even when the URL asks for a weaker one.
 	requestedMask := ""
 	if len(parts) == 2 {
-		if _, ok := h.fitPreviewSize(parts[0]); !ok || (parts[1] != config.PrivacyBlurVariantKey && parts[1] != config.PrivacyFaceBlurVariantKey) {
+		if _, ok := h.configuredPreview(parts[0]); !ok || (parts[1] != config.PrivacyBlurVariantKey && parts[1] != config.PrivacyFaceBlurVariantKey) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 			return
 		}
@@ -540,25 +552,25 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}
-	if _, fitPreview := h.fitPreviewSize(variantKey); fitPreview {
+	if _, configured := h.configuredPreview(variantKey); configured {
 		sourceVariant := requestedMask
 		if decision.Managed && decision.Mode != mediaDeliveryOriginal {
 			if decision.Mode == mediaDeliveryBlur || sourceVariant != config.PrivacyBlurVariantKey {
 				sourceVariant = string(decision.Mode)
 			}
 		}
-		// Новые загрузки уже содержат настроенный fit-вариант в bundle.
+		// Новые загрузки уже содержат настроенный размер в bundle.
 		// Для старых фото и приватных масок вариант создаётся при запросе.
 		_, ready := manifest.Variants[variantKey]
 		if sourceVariant != "" || !ready {
-			previewCID, err := h.ensureFitPreview(ctx, cid, manifest, variantKey, sourceVariant)
+			previewCID, err := h.ensureConfiguredPreview(ctx, cid, manifest, variantKey, sourceVariant)
 			if err != nil {
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Configured preview is unavailable"})
 				return
 			}
 			reader, err := h.cluster.ClusterTryFetch(ctx, previewCID)
 			if err != nil {
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Fit preview is unavailable"})
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Configured preview is unavailable"})
 				return
 			}
 			defer reader.Close()

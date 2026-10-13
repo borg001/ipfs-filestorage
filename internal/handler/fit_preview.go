@@ -7,30 +7,31 @@ import (
 	"io"
 
 	"github.com/borg001/ipfs-filestorage/internal/bundle"
+	"github.com/borg001/ipfs-filestorage/internal/config"
 	"github.com/borg001/ipfs-filestorage/internal/store"
 )
 
 const fitPreviewMaxSource = 100 << 20
 
-func (h *Handler) fitPreviewSize(variant string) (int, bool) {
+func (h *Handler) configuredPreview(variant string) (config.ImageVariant, bool) {
 	if h.cfg == nil || !h.cfg.Image.ProcessingEnabled {
-		return 0, false
+		return config.ImageVariant{}, false
 	}
 	for _, item := range h.cfg.Image.Variants {
-		if item.Key == variant && item.Mode == "fit" && item.Width > 0 && item.Width == item.Height {
-			return item.Width, true
+		if item.Key == variant && item.Width > 0 && item.Height > 0 {
+			return item, true
 		}
 	}
-	return 0, false
+	return config.ImageVariant{}, false
 }
 
-// ensureFitPreview generates a rendition once for both existing and new
+// ensureConfiguredPreview generates a rendition once for both existing and new
 // bundles. The IPFS CID is persisted on the instance's data volume, alongside
 // the existing variant overrides, so restarts do not trigger recomputation.
-func (h *Handler) ensureFitPreview(ctx context.Context, cid string, manifest bundle.Manifest, variant, sourceVariant string) (string, error) {
-	maxSide, ok := h.fitPreviewSize(variant)
+func (h *Handler) ensureConfiguredPreview(ctx context.Context, cid string, manifest bundle.Manifest, variant, sourceVariant string) (string, error) {
+	size, ok := h.configuredPreview(variant)
 	if !ok {
-		return "", fmt.Errorf("unsupported fit preview %q", variant)
+		return "", fmt.Errorf("unsupported configured preview %q", variant)
 	}
 	if h.imageProcessor == nil || h.variantOverrides == nil || manifest.Type != "image" {
 		return "", fmt.Errorf("image preview is not configured")
@@ -45,9 +46,9 @@ func (h *Handler) ensureFitPreview(ctx context.Context, cid string, manifest bun
 		sourcePath = asset.BundlePath
 		sourceCID, _ = h.variantOverrides.Get(store.VariantOverrideKey(cid, sourceVariant))
 	}
-	// A redrawn privacy mask changes the source CID. Its fit rendition must
+	// A redrawn privacy mask changes the source CID. Its resized rendition must
 	// use a new key so an old preview cannot outlive the replacement mask.
-	cacheVariant := variant
+	cacheVariant := fmt.Sprintf("preview-v2/%s/%dx%d/%s/%s/q%d", variant, size.Width, size.Height, size.Mode, h.cfg.Image.ResizePolicy, h.cfg.Image.JPEGQuality)
 	if sourceVariant != "" {
 		cacheVariant += "/" + sourceVariant
 		if sourceCID != "" {
@@ -80,7 +81,7 @@ func (h *Handler) ensureFitPreview(ctx context.Context, cid string, manifest bun
 		if len(source) > fitPreviewMaxSource {
 			return nil, fmt.Errorf("source image exceeds preview limit")
 		}
-		preview, err := h.imageProcessor.FitPreview(ctx, source, maxSide)
+		preview, err := h.imageProcessor.ConfiguredPreview(ctx, source, size)
 		if err != nil {
 			return nil, err
 		}

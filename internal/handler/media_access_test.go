@@ -306,3 +306,35 @@ func TestVideoPolicyProtectsMasterSegmentsAndPosters(t *testing.T) {
 		}
 	})
 }
+
+func TestCachedManifestDoesNotShareViewerPermissions(t *testing.T) {
+	cid := testCID("CachedPrivate")
+	policy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mode := "blur"
+		if r.Header.Get("Authorization") == "Bearer owner-token" {
+			mode = "original"
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"rows": []map[string]interface{}{{"delivery_mode": mode, "storage_uri": "ipfs://" + cid}}})
+	}))
+	defer policy.Close()
+	h := setupTestHandler(&config.Config{})
+	h.mediaAccess = newMediaAccessResolver(config.MediaAccessConfig{URL: policy.URL, TimeoutMs: 1000})
+	manifest := bundle.Manifest{CID: cid, Original: bundle.Asset{BundlePath: bundle.OriginalFilename, ContentType: "image/jpeg"}, Variants: map[string]bundle.Asset{"blur": {BundlePath: "blur.jpg", ContentType: "image/jpeg"}}}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cluster.(*mockCluster).dirs[cid] = map[string][]byte{bundle.ManifestFilename: data, bundle.OriginalFilename: []byte("original"), "blur.jpg": []byte("blurred")}
+	for _, tc := range []struct{ token, want string }{{"owner-token", "original"}, {"viewer-token", "blurred"}, {"owner-token", "original"}} {
+		r := httptest.NewRequest("GET", "/file/"+cid, nil)
+		r.Header.Set("Authorization", "Bearer "+tc.token)
+		w := httptest.NewRecorder()
+		h.HandleFile(w, r)
+		if w.Code != 200 || w.Body.String() != tc.want {
+			t.Fatalf("viewer %s: %d %q", tc.token, w.Code, w.Body.String())
+		}
+		if _, ok := h.manifests.get(cid); !ok {
+			t.Fatal("test did not warm the manifest cache")
+		}
+	}
+}

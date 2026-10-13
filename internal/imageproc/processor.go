@@ -69,6 +69,16 @@ var ErrImageTooLarge = fmt.Errorf("image dimensions exceed %d pixels", MaxDecode
 // FitPreview keeps the complete photograph while limiting its longest side.
 // It is used for feed display; opening the photograph still requests original.
 func (p *Processor) FitPreview(ctx context.Context, data []byte, maxSide int) ([]byte, error) {
+	return p.ConfiguredPreview(ctx, data, config.ImageVariant{Width: maxSide, Height: maxSide, Mode: "fit"})
+}
+
+// ConfiguredPreview resizes already authorized bytes, including privacy masks,
+// using the same configured geometry as upload-time variants. It never detects
+// faces again or substitutes original bytes for the supplied source.
+func (p *Processor) ConfiguredPreview(ctx context.Context, data []byte, variant config.ImageVariant) ([]byte, error) {
+	if variant.Width <= 0 || variant.Height <= 0 || int64(variant.Width)*int64(variant.Height) > MaxDecodePixels {
+		return nil, ErrImageTooLarge
+	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -80,7 +90,10 @@ func (p *Processor) FitPreview(ctx context.Context, data []byte, maxSide int) ([
 	if err != nil {
 		return nil, err
 	}
-	return p.encode(ctx, fitInside(src, maxSide), "jpeg")
+	if variant.Mode == "fit" {
+		return p.encode(ctx, fitInside(src, variant.Width), "jpeg")
+	}
+	return p.encode(ctx, resize(src, variant.Width, variant.Height, p.cfg.ResizePolicy, true), "jpeg")
 }
 
 func fitInside(src image.Image, maxSide int) image.Image {

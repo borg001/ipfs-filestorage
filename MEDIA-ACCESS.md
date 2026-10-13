@@ -94,3 +94,17 @@ the API has removed the endpoint.
 The policy read takes about 0.1 s once the API's database connection sends
 `jit=off`; with JIT, compiling it took about 1.8 s, close to
 `MEDIA_ACCESS_TIMEOUT_MS` (2500), and avatars answered 503.
+
+## Размеры защищённых изображений (12.10.2026)
+
+`/file/{cid}/{variant}` и `/file/link/{id}/{variant}` применяют размеры из
+`IMAGE_VARIANTS` к разрешённой версии изображения, включая `blur` и `blur_faces`.
+Crop сохраняет настроенную геометрию, fit — весь кадр в заданных пределах.
+Явный `/{variant}/blur` не ослабляет более строгую маску политики/grant.
+Производные файлы создаются один раз и сохраняются через variant overrides;
+ключ включает размер, режим, качество и CID перерисованной маски.
+Права и отзыв grant проверяются при каждом запросе, HTTP остаётся private/no-store.
+
+Клиент IPFS использует ограниченный пул свободных HTTP-соединений вместо
+отключённого в стандартном клиенте Kubo keep-alive. Чтение по CID и пути
+распределяется между узлами с последовательным переходом к другим при ошибке.

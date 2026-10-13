@@ -148,6 +148,7 @@ func setupTestHandler(cfg *config.Config) *Handler {
 	unpinStore, _ := store.NewUnpinStore("/tmp/test-unpin-store.json")
 	return &Handler{
 		cfg:            cfg,
+		manifests:      newManifestCache(8 << 20),
 		cluster:        cluster,
 		unpinStore:     unpinStore,
 		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),

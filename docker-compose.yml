@@ -89,6 +89,7 @@ services:
     environment:
       - SERVER_PORT=${SERVER_PORT:-3000}
       - IPFS_URL=http://ipfs1:5001
+      - IAMFREE_DIAGNOSTICS=${IAMFREE_DIAGNOSTICS:-0}
       - CLUSTER_NODES=${CLUSTER_NODES:-http://ipfs1:5001,http://ipfs2:5001}
       - UNPIN_STORE_PATH=/data/unpin-store.json
     volumes:
@@ -118,6 +119,7 @@ services:
     environment:
       - SERVER_PORT=${SERVER_PORT:-3000}
       - IPFS_URL=http://ipfs2:5001
+      - IAMFREE_DIAGNOSTICS=${IAMFREE_DIAGNOSTICS:-0}
       - CLUSTER_NODES=${CLUSTER_NODES:-http://ipfs1:5001,http://ipfs2:5001}
       - UNPIN_STORE_PATH=/data/unpin-store.json
     volumes:
@@ -137,6 +139,10 @@ services:
   nginx:
     restart: unless-stopped
     image: nginx:alpine
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
     container_name: nginx
     ports:
       - "${NGINX_PORT:-8081}:80"

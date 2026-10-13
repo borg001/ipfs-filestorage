@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -39,7 +40,13 @@ func New(url string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid ipfs url %q: %w", url, err)
 	}
-	api, err := rpc.NewApi(ma)
+	// Kubo's NewApi disables keep-alive by default. Each manifest and image
+	// read then reconnects to IPFS. Retain a bounded idle pool instead;
+	// request contexts continue to control cancellation and streaming.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	api, err := rpc.NewApiWithClient(ma, &http.Client{Transport: transport})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ipfs rpc client: %w", err)
 	}
@@ -121,15 +128,7 @@ func (c *Client) Cat(ctx context.Context, cidStr string) (io.ReadCloser, error) 
 	if err != nil {
 		return nil, err
 	}
-	node, err := c.api.Unixfs().Get(ctx, p)
-	if err != nil {
-		return nil, fmt.Errorf("ipfs get failed for %s: %w", cidStr, err)
-	}
-	f, ok := node.(files.File)
-	if !ok {
-		return nil, fmt.Errorf("cid %s is not a file", cidStr)
-	}
-	return f, nil
+	return c.cat(ctx, p)
 }
 
 // CatPath читает файл внутри UnixFS directory CID.
@@ -138,19 +137,28 @@ func (c *Client) CatPath(ctx context.Context, cidStr, filePath string) (io.ReadC
 	if err != nil {
 		return nil, fmt.Errorf("invalid IPFS path %q/%q: %w", cidStr, filePath, err)
 	}
-	node, err := c.api.Unixfs().Get(ctx, p)
+	return c.cat(ctx, p)
+}
+
+// cat reads known file paths directly. Unixfs.Get performs an extra files/stat
+// RPC to discover the node type, which is only needed by directory traversal.
+// Keep the RPC output wrapper: it propagates stream errors from HTTP trailers.
+func (c *Client) cat(ctx context.Context, p path.Path) (io.ReadCloser, error) {
+	response, err := c.api.Request("cat", p.String()).Send(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("ipfs get failed for %s/%s: %w", cidStr, filePath, err)
+		return nil, fmt.Errorf("ipfs cat failed for %s: %w", p.String(), err)
 	}
-	f, ok := node.(files.File)
-	if !ok {
-		return nil, fmt.Errorf("path %s/%s is not a file", cidStr, filePath)
+	if response.Error != nil {
+		_ = response.Cancel()
+		return nil, fmt.Errorf("ipfs cat failed for %s: %w", p.String(), response.Error)
 	}
-	return f, nil
+	// Close aborts an unfinished read without draining a potentially large file.
+	// Fully consumed responses remain eligible for HTTP connection reuse.
+	return response.Output, nil
 }
 
 // Fetch подтягивает все блоки CID с других нод через bitswap.
-// Вызывает Cat() и полностью вычитывает reader, чтобы гарантировать
+// Обходит UnixFS-файл или каталог и полностью вычитывает данные, чтобы гарантировать
 // передачу всех блоков DAG. После Fetch блоки локальны, и Pin сработает.
 func (c *Client) Fetch(ctx context.Context, cidStr string) error {
 	p, err := parsePath(cidStr)
