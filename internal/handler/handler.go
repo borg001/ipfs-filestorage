@@ -52,6 +52,7 @@ type Handler struct {
 	mediaGrants      *mediaGrantVerifier
 	uploads          *uploadBudget
 	fitPreviewGroup  singleflight.Group
+	manifests        *manifestCache
 }
 
 // NewHandler создаёт Handler с подключением к IPFS-кластеру.
@@ -78,6 +79,7 @@ func NewHandler(cfg *config.Config) *Handler {
 
 	h := &Handler{
 		cfg:              cfg,
+		manifests:        newManifestCache(cfg.IPFS.ManifestCacheBytes),
 		cluster:          cluster,
 		unpinStore:       unpinStore,
 		variantOverrides: variantOverrides,
@@ -430,6 +432,10 @@ func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) readManifest(ctx context.Context, cid string) (bundle.Manifest, error) {
+	return h.manifests.load(ctx, cid, func(ctx context.Context) (bundle.Manifest, error) { return h.fetchManifest(ctx, cid) })
+}
+
+func (h *Handler) fetchManifest(ctx context.Context, cid string) (bundle.Manifest, error) {
 	reader, err := h.cluster.ClusterTryFetchPath(ctx, cid, bundle.ManifestFilename)
 	if err != nil {
 		return bundle.Manifest{}, err

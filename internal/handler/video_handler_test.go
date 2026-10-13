@@ -42,6 +42,7 @@ func setupVideoTestHandler(t *testing.T, cfg *config.Config) *Handler {
 	}
 	return &Handler{
 		cfg:            cfg,
+		manifests:      newManifestCache(8 << 20),
 		cluster:        cluster,
 		unpinStore:     unpinStore,
 		imageProcessor: imageproc.NewProcessor(cfg.Image, cfg.Video.FFmpegPath),
