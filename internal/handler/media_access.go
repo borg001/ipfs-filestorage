@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,6 +33,15 @@ func writeMediaAccessError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Media access denied"})
 		return
 	}
+	// Do not log err: a transport error can contain the policy URL and token.
+	kind := "upstream_error"
+	var networkError net.Error
+	if errors.Is(err, context.Canceled) {
+		kind = "canceled"
+	} else if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkError) && networkError.Timeout() {
+		kind = "timeout"
+	}
+	log.Printf("[media-access] unavailable category=%s", kind)
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media access service unavailable"})
 }
 
@@ -79,7 +90,10 @@ func newMediaAccessResolver(cfg config.MediaAccessConfig) *mediaAccessResolver {
 	if timeout <= 0 {
 		timeout = 2500 * time.Millisecond
 	}
-	return &mediaAccessResolver{cidEndpoint: cidEndpoint, linkEndpoint: linkEndpoint, client: &http.Client{Timeout: timeout}}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 64
+	transport.MaxIdleConnsPerHost = 32
+	return &mediaAccessResolver{cidEndpoint: cidEndpoint, linkEndpoint: linkEndpoint, client: &http.Client{Timeout: timeout, Transport: transport}}
 }
 
 // Resolve requires an explicit policy for every resource, including
@@ -166,7 +180,13 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 	if err != nil {
 		return mediaDeliveryDecision{}, fmt.Errorf("request media policy: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		// A decoder can finish before the last HTTP chunk. Consume a bounded
+		// remainder on both allowed and denied replies to return small policy
+		// responses to the connection pool. Authorization is never cached.
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 32<<10))
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusUnauthorized {
 		return mediaDeliveryDecision{}, errMediaAccessDenied
 	}
