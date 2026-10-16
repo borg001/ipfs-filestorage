@@ -41,6 +41,8 @@ type IPFSConfig struct {
 	ClusterNodes []string
 	// Budget for decoded immutable bundle manifests; zero disables caching.
 	ManifestCacheBytes int
+	// Disposable disk cache of completed immutable file reads; zero disables it.
+	FileCacheBytes int64
 }
 
 type APIConfig struct {
@@ -220,6 +222,7 @@ func Load() *Config {
 			LocalURL:           getEnv("IPFS_URL", "http://localhost:5001"),
 			ClusterNodes:       getEnvSlice("CLUSTER_NODES", []string{"http://localhost:5001"}),
 			ManifestCacheBytes: getEnvInt("IPFS_MANIFEST_CACHE_BYTES", 8<<20),
+			FileCacheBytes:     int64(getEnvInt("IPFS_FILE_CACHE_BYTES", 0)),
 		},
 		API: APIConfig{
 			Keys: getEnvSlice("API_KEYS", []string{}),
