@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -61,6 +64,27 @@ func TestCachedProtectedFileHTTPFramingAndSniffing(t *testing.T) {
 				if attempt == 1 && (response.ContentLength != int64(len(body)) || len(response.TransferEncoding) != 0) {
 					t.Fatalf("warm file uses incorrect HTTP framing: length=%d transfer=%v", response.ContentLength, response.TransferEncoding)
 				}
+			}
+			// Inspect the wire: http.Client would hide an unexpected HEAD body.
+			address, _ := url.Parse(server.URL)
+			connection, err := net.DialTimeout("tcp", address.Host, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			connection.SetDeadline(time.Now().Add(2 * time.Second))
+			fmt.Fprintf(connection, "HEAD /file/link/55?token=session&grant=%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", url.QueryEscape(grant), address.Host)
+			wire := bufio.NewReader(connection)
+			head, err := http.ReadResponse(wire, &http.Request{Method: http.MethodHead})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if head.StatusCode != 200 || head.ContentLength != int64(len(body)) {
+				t.Fatalf("HEAD headers: %d %d", head.StatusCode, head.ContentLength)
+			}
+			extra, err := io.ReadAll(wire)
+			if err != nil || len(extra) != 0 {
+				t.Fatalf("HEAD sent body: bytes=%d err=%v", len(extra), err)
 			}
 		})
 	}

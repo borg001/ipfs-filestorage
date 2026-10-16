@@ -585,6 +585,9 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 			w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
 			setCachedFileLength(w, reader)
 			w.WriteHeader(http.StatusOK)
+			if r.Method == http.MethodHead {
+				return
+			}
 			copyCachedFile(w, reader)
 			return
 		}
@@ -639,6 +642,9 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
 	setCachedFileLength(w, reader)
 	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
 	copyCachedFile(w, source)
 }
 
