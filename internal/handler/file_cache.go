@@ -213,3 +213,13 @@ func setCachedFileLength(w http.ResponseWriter, reader io.Reader) {
 		w.Header().Set("Content-Length", strconv.FormatInt(hit.entry.size, 10))
 	}
 }
+
+// Keep the concrete *os.File visible through a LimitedReader. Go 1.23's
+// File.WriteTo fallback wraps it in a private type that net.sendFile cannot
+// recognize. CopyN lets net/http.ReaderFrom pass the real file to TCPConn.
+func copyCachedFile(w io.Writer, reader io.Reader) (int64, error) {
+	if hit, ok := reader.(*cacheHit); ok {
+		return io.CopyN(w, hit.File, hit.entry.size)
+	}
+	return io.Copy(w, reader)
+}

@@ -585,7 +585,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 			w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
 			setCachedFileLength(w, reader)
 			w.WriteHeader(http.StatusOK)
-			io.Copy(w, reader)
+			copyCachedFile(w, reader)
 			return
 		}
 	}
@@ -639,7 +639,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
 	setCachedFileLength(w, reader)
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, source)
+	copyCachedFile(w, source)
 }
 
 // setUserFileHeaders keeps a file anyone uploaded from acting as a page of
