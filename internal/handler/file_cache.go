@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"sync"
 )
 
@@ -201,4 +203,13 @@ func (r *cacheFill) Read(p []byte) (int, error) {
 func (r *cacheFill) Close() error {
 	r.finish(false)
 	return r.source.Close()
+}
+
+// Complete cache files are immutable and their length was measured on fill.
+// Supplying it avoids chunked encoding and lets net/http use the file's
+// WriteTo/sendfile path. Authorization still runs before opening the file.
+func setCachedFileLength(w http.ResponseWriter, reader io.Reader) {
+	if hit, ok := reader.(*cacheHit); ok {
+		w.Header().Set("Content-Length", strconv.FormatInt(hit.entry.size, 10))
+	}
 }

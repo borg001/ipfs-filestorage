@@ -583,6 +583,7 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 			w.Header().Set("Content-Type", "image/jpeg")
 			setUserFileHeaders(w, "image/jpeg")
 			w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
+			setCachedFileLength(w, reader)
 			w.WriteHeader(http.StatusOK)
 			io.Copy(w, reader)
 			return
@@ -621,8 +622,10 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	}
 	defer reader.Close()
 
-	buffered := bufio.NewReader(reader)
+	var source io.Reader = reader
 	if contentType == "" {
+		buffered := bufio.NewReader(reader)
+		source = buffered
 		sniff, err := buffered.Peek(512)
 		if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to read file"})
@@ -634,8 +637,9 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 	w.Header().Set("Content-Type", contentType)
 	setUserFileHeaders(w, contentType)
 	w.Header().Set("Cache-Control", protectedMediaCacheControl(decision.Managed))
+	setCachedFileLength(w, reader)
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, buffered)
+	io.Copy(w, source)
 }
 
 // setUserFileHeaders keeps a file anyone uploaded from acting as a page of
