@@ -559,6 +559,23 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}
+	// An avatar shows only the part of its picture it was framed to: each
+	// size of it is cut from that part, and a size that is not a configured
+	// one - the original - is that part bounded like the whole fit preview.
+	crop, cropped := parseDeliveryCrop(decision.Crop)
+	if cropped && manifest.Type == "image" {
+		if _, configured := h.configuredPreview(variantKey); !configured {
+			variantKey = cropFallbackVariant
+		}
+		if _, configured := h.configuredPreview(variantKey); !configured {
+			cropped = false
+		}
+	} else {
+		cropped = false
+	}
+	if !cropped {
+		crop = nil
+	}
 	if _, configured := h.configuredPreview(variantKey); configured {
 		sourceVariant := requestedMask
 		if decision.Managed && decision.Mode != mediaDeliveryOriginal {
@@ -569,8 +586,8 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		// Новые загрузки уже содержат настроенный размер в bundle.
 		// Для старых фото и приватных масок вариант создаётся при запросе.
 		_, ready := manifest.Variants[variantKey]
-		if sourceVariant != "" || !ready {
-			previewCID, err := h.ensureConfiguredPreview(ctx, cid, manifest, variantKey, sourceVariant)
+		if sourceVariant != "" || !ready || cropped {
+			previewCID, err := h.ensureConfiguredPreview(ctx, cid, manifest, variantKey, sourceVariant, crop)
 			if err != nil {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Configured preview is unavailable"})
 				return
