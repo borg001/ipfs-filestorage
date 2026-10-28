@@ -234,10 +234,10 @@ func checkDiskSpace(dir string, requiredBytes int64) error {
 
 // HandleUpload обрабатывает POST /upload (один файл).
 func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
+	if !h.parseUploadForm(w, r, 0) {
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeUploadError(w, r, http.StatusBadRequest, "upload_missing_file", nil)
@@ -305,13 +305,14 @@ const maxFilesPerUpload = 20
 func (h *Handler) HandleUploadMultiple(w http.ResponseWriter, r *http.Request) {
 	// One request carries at most maxFilesPerUpload files of the allowed size:
 	// the body was unbounded and every file got a goroutine of its own.
+	var routeLimit int64
 	if h.cfg != nil && h.cfg.Upload.MaxFileSize > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, h.cfg.Upload.MaxFileSize*maxFilesPerUpload+(1<<20))
+		routeLimit = h.cfg.Upload.MaxFileSize*maxFilesPerUpload + (1 << 20)
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
+	if !h.parseUploadForm(w, r, routeLimit) {
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	files := r.MultipartForm.File["files"]
 	if len(files) == 0 {
 		writeUploadError(w, r, http.StatusBadRequest, "upload_missing_file", nil)
@@ -558,6 +559,23 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "File not found"})
 		return
 	}
+	// An avatar shows only the part of its picture it was framed to: each
+	// size of it is cut from that part, and a size that is not a configured
+	// one - the original - is that part bounded like the whole fit preview.
+	crop, cropped := parseDeliveryCrop(decision.Crop)
+	if cropped && manifest.Type == "image" {
+		if _, configured := h.configuredPreview(variantKey); !configured {
+			variantKey = cropFallbackVariant
+		}
+		if _, configured := h.configuredPreview(variantKey); !configured {
+			cropped = false
+		}
+	} else {
+		cropped = false
+	}
+	if !cropped {
+		crop = nil
+	}
 	if _, configured := h.configuredPreview(variantKey); configured {
 		sourceVariant := requestedMask
 		if decision.Managed && decision.Mode != mediaDeliveryOriginal {
@@ -568,8 +586,8 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, cid string, 
 		// Новые загрузки уже содержат настроенный размер в bundle.
 		// Для старых фото и приватных масок вариант создаётся при запросе.
 		_, ready := manifest.Variants[variantKey]
-		if sourceVariant != "" || !ready {
-			previewCID, err := h.ensureConfiguredPreview(ctx, cid, manifest, variantKey, sourceVariant)
+		if sourceVariant != "" || !ready || cropped {
+			previewCID, err := h.ensureConfiguredPreview(ctx, cid, manifest, variantKey, sourceVariant, crop)
 			if err != nil {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Configured preview is unavailable"})
 				return

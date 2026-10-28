@@ -51,6 +51,9 @@ type APIConfig struct {
 
 type UploadConfig struct {
 	MaxFileSize int64
+	// MaxRequestSize bounds the entire multipart body on every upload route.
+	// Zero preserves the legacy per-route limits.
+	MaxRequestSize int64
 	// DailyBytesPerSession bounds what one session uploads a day on one
 	// instance; 0 turns the bound off.
 	DailyBytesPerSession int64
@@ -231,6 +234,7 @@ func Load() *Config {
 		// file runs script there.
 		Upload: UploadConfig{
 			MaxFileSize:          getEnvInt64("UPLOAD_MAX_FILE_SIZE", 10*1024*1024),
+			MaxRequestSize:       getEnvInt64("UPLOAD_MAX_REQUEST_SIZE", 0),
 			DailyBytesPerSession: getEnvInt64("UPLOAD_DAILY_BYTES_PER_SESSION", 4*1024*1024*1024),
 			AllowedExtensions:    getEnvSlice("UPLOAD_ALLOWED_EXTENSIONS", []string{"png", "jpg", "jpeg", "webp", "heic", "heif", "pdf", "doc", "docx", "zip", "json", "txt", "mp4", "mov", "webm", "avi", "mkv"}),
 			AllowedMimeTypes: map[string]bool{
