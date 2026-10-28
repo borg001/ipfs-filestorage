@@ -44,6 +44,8 @@ func localizedUploadMessage(locale, code string, details map[string]any) string 
 			return "Этот формат файла не поддерживается."
 		case "file_too_large", "video_file_too_large":
 			return fmt.Sprintf("Размер файла превышает допустимые %s.", maxSize)
+		case "upload_request_too_large":
+			return fmt.Sprintf("Общий размер загрузки превышает лимит %d байт. Отправьте файлы меньшими группами.", numberDetail(details, "max_request_bytes"))
 		case "video_duration_exceeded":
 			return fmt.Sprintf("Длительность видео превышает допустимые %d сек.", maxDuration)
 		case "video_metadata_invalid":
@@ -70,6 +72,8 @@ func localizedUploadMessage(locale, code string, details map[string]any) string 
 		return "This file format is not supported."
 	case "file_too_large", "video_file_too_large":
 		return fmt.Sprintf("The file exceeds the %s limit.", maxSize)
+	case "upload_request_too_large":
+		return fmt.Sprintf("The complete upload exceeds the %d byte limit. Send files in smaller batches.", numberDetail(details, "max_request_bytes"))
 	case "video_duration_exceeded":
 		return fmt.Sprintf("The video exceeds the %d second duration limit.", maxDuration)
 	case "video_metadata_invalid":

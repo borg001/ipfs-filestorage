@@ -329,6 +329,7 @@ docker compose up --build -d
 | `CLUSTER_NODES` | `http://ipfs1:5001,http://ipfs2:5001` | Адреса всех нод кластера через запятую |
 | `API_KEYS` | empty | Опциональные статические API-ключи через запятую |
 | `UPLOAD_MAX_FILE_SIZE` | `10485760` (10 МБ) | Максимальный размер файла |
+| `UPLOAD_MAX_REQUEST_SIZE` | `0` | Общий предел тела запроса в байтах для `/upload`, `/upload-multiple`, `/upload-video`, включая multipart. `0` сохраняет прежние ограничения маршрутов. Для production: `100000000` (100 MB); `VIDEO_MAX_SIZE_MB=95` (95 MiB ≈ 99,6 MB) оставляет место для multipart. Обычный файл по-прежнему ограничен 10 MiB. Превышение общего предела: HTTP 413, `upload_request_too_large`; лимит публикуется в `upload.max_request_bytes` конфигурационного API. |
 | `UPLOAD_ALLOWED_EXTENSIONS` | `png,svg,jpg,jpeg,webp,pdf,doc,docx,zip,json,html,txt,mp4,mov,webm,avi,mkv` | Разрешённые расширения |
 | `RATE_LIMIT_RPS` | `100` | Максимум HTTP-запросов в секунду для одного клиентского IP |
 | `RATE_LIMIT_BURST` | `200` | Допустимый кратковременный burst для одного IP; должен покрывать загрузку страницы с media variants |
