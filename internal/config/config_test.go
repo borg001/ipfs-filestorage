@@ -9,7 +9,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	envKeys := []string{
 		"SERVER_PORT", "IPFS_URL", "CLUSTER_NODES",
-		"API_KEYS", "UPLOAD_MAX_FILE_SIZE", "UPLOAD_ALLOWED_EXTENSIONS",
+		"API_KEYS", "UPLOAD_MAX_FILE_SIZE", "UPLOAD_MAX_REQUEST_SIZE", "UPLOAD_ALLOWED_EXTENSIONS",
 		"PINNING_RETRIES", "PINNING_RETRY_DELAY_MS",
 		"UNPIN_TTL", "UNPIN_GC_INTERVAL", "UNPIN_STORE_PATH",
 		"CORS_ALLOWED_ORIGINS", "CORS_ALLOWED_HEADERS",
@@ -81,6 +81,7 @@ func TestImageVariantsCanMixCroppedAndWholeSizes(t *testing.T) {
 }
 
 func TestLoadEnvOverrides(t *testing.T) {
+	t.Setenv("UPLOAD_MAX_REQUEST_SIZE", "100000000")
 	t.Setenv("SERVER_PORT", "8080")
 	t.Setenv("VIDEO_MAX_DURATION_SEC", "120")
 	t.Setenv("VIDEO_MAX_SIZE_MB", "50")
@@ -98,6 +99,9 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("MEDIA_ACCESS_TIMEOUT_MS", "1800")
 
 	cfg := Load()
+	if cfg.Upload.MaxRequestSize != 100000000 {
+		t.Fatalf("Upload.MaxRequestSize = %d, want 100000000 bytes", cfg.Upload.MaxRequestSize)
+	}
 
 	if cfg.Server.Port != "8080" {
 		t.Errorf("Server.Port = %q, want 8080", cfg.Server.Port)

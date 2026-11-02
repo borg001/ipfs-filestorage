@@ -95,5 +95,9 @@ func (v *mediaGrantVerifier) resolve(r *http.Request, link string) (mediaDeliver
 	if err := v.state.Check(r.Context(), claims); err != nil {
 		return mediaDeliveryDecision{}, err
 	}
-	return mediaDeliveryDecision{Mode: mediaDeliveryMode(claims.Mode), Managed: true, SourceCID: claims.SourceCID, SourceIsVideo: claims.Video, PosterCID: claims.PosterCID}, nil
+	decision := mediaDeliveryDecision{Mode: mediaDeliveryMode(claims.Mode), Managed: true, SourceCID: claims.SourceCID, SourceIsVideo: claims.Video, PosterCID: claims.PosterCID}
+	if _, valid := parseDeliveryCrop(claims.Crop); valid {
+		decision.Crop = claims.Crop
+	}
+	return decision, nil
 }

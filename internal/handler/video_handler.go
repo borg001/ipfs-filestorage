@@ -40,10 +40,10 @@ func (c *clusterAdder) Add(ctx context.Context, filename string, r io.Reader) (*
 
 // HandleUploadVideo обрабатывает POST /upload-video.
 func (h *Handler) HandleUploadVideo(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(h.cfg.Video.MaxSizeBytes + (1 << 20)); err != nil {
-		writeUploadError(w, r, http.StatusBadRequest, "upload_form_invalid", nil)
+	if !h.parseUploadForm(w, r, 0) {
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 
 	file, header, err := r.FormFile("file")
 	if err != nil {

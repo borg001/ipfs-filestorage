@@ -90,6 +90,43 @@ func (p *Processor) ConfiguredPreview(ctx context.Context, data []byte, variant 
 	if err != nil {
 		return nil, err
 	}
+	return p.previewOf(ctx, src, variant)
+}
+
+// CroppedPreview is ConfiguredPreview of a part of the picture: the frame an
+// avatar was given, as fractions of the picture's width and height from its
+// top left corner. The bytes are cut in memory and never stored whole.
+func (p *Processor) CroppedPreview(ctx context.Context, data []byte, variant config.ImageVariant, x, y, w, h float64) ([]byte, error) {
+	if variant.Width <= 0 || variant.Height <= 0 || int64(variant.Width)*int64(variant.Height) > MaxDecodePixels {
+		return nil, ErrImageTooLarge
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > MaxDecodePixels {
+		return nil, ErrImageTooLarge
+	}
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	bounds := src.Bounds()
+	part := image.Rect(
+		bounds.Min.X+int(math.Round(x*float64(bounds.Dx()))),
+		bounds.Min.Y+int(math.Round(y*float64(bounds.Dy()))),
+		bounds.Min.X+int(math.Round((x+w)*float64(bounds.Dx()))),
+		bounds.Min.Y+int(math.Round((y+h)*float64(bounds.Dy()))),
+	).Intersect(bounds)
+	if part.Dx() < 1 || part.Dy() < 1 {
+		return nil, fmt.Errorf("the frame lies outside the picture")
+	}
+	framed := image.NewNRGBA(image.Rect(0, 0, part.Dx(), part.Dy()))
+	draw.Draw(framed, framed.Bounds(), src, part.Min, draw.Src)
+	return p.previewOf(ctx, framed, variant)
+}
+
+func (p *Processor) previewOf(ctx context.Context, src image.Image, variant config.ImageVariant) ([]byte, error) {
 	if variant.Mode == "fit" {
 		return p.encode(ctx, fitInside(src, variant.Width), "jpeg")
 	}

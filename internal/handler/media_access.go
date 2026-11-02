@@ -61,6 +61,9 @@ type mediaDeliveryDecision struct {
 	SourceCID     string
 	SourceIsVideo bool
 	PosterCID     string
+	// Crop is the part of the picture the link shows - an avatar framed in
+	// the gallery - as the policy wrote it; empty shows the picture whole.
+	Crop string
 }
 
 func newMediaAccessResolver(cfg config.MediaAccessConfig) *mediaAccessResolver {
@@ -226,6 +229,13 @@ func (r *mediaAccessResolver) resolve(ctx context.Context, source *http.Request,
 		}
 		if decision.PosterCID == "" {
 			decision.PosterCID = mediaStorageCID(row["poster_uri"])
+		}
+		if decision.Crop == "" {
+			if crop, ok := responseString(row["delivery_crop"]); ok {
+				if _, valid := parseDeliveryCrop(crop); valid {
+					decision.Crop = crop
+				}
+			}
 		}
 	}
 	return decision, nil

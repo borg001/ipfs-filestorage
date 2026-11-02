@@ -33,7 +33,8 @@ type privacyVariantConfig struct {
 // uploadPublicConfig exposes only client-facing media limits. It deliberately
 // does not expose storage paths, IPFS topology or authentication settings.
 type uploadPublicConfig struct {
-	Media mediaUploadPublicConfig `json:"media"`
+	MaxRequestBytes int64                   `json:"max_request_bytes,omitempty"`
+	Media           mediaUploadPublicConfig `json:"media"`
 }
 
 type mediaUploadPublicConfig struct {
@@ -86,7 +87,7 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 			URLTemplate:     "/file/{cid}/{size}",
 			BundleTemplate:  "/file/{cid}/bundle",
 		},
-		Upload: uploadPublicConfig{Media: mediaUploadPublicConfig{
+		Upload: uploadPublicConfig{MaxRequestBytes: h.cfg.Upload.MaxRequestSize, Media: mediaUploadPublicConfig{
 			Image: mediaUploadPolicy{
 				// The file picker is also given the extensions: an iPhone offers a
 				// HEIC photo without naming its type.

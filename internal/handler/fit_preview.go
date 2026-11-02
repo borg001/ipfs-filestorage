@@ -28,7 +28,7 @@ func (h *Handler) configuredPreview(variant string) (config.ImageVariant, bool) 
 // ensureConfiguredPreview generates a rendition once for both existing and new
 // bundles. The IPFS CID is persisted on the instance's data volume, alongside
 // the existing variant overrides, so restarts do not trigger recomputation.
-func (h *Handler) ensureConfiguredPreview(ctx context.Context, cid string, manifest bundle.Manifest, variant, sourceVariant string) (string, error) {
+func (h *Handler) ensureConfiguredPreview(ctx context.Context, cid string, manifest bundle.Manifest, variant, sourceVariant string, crop *deliveryCrop) (string, error) {
 	size, ok := h.configuredPreview(variant)
 	if !ok {
 		return "", fmt.Errorf("unsupported configured preview %q", variant)
@@ -54,6 +54,10 @@ func (h *Handler) ensureConfiguredPreview(ctx context.Context, cid string, manif
 		if sourceCID != "" {
 			cacheVariant += "/" + sourceCID
 		}
+	}
+	// A framed avatar is its own rendition: the frame is part of its key.
+	if crop != nil {
+		cacheVariant += "/crop-" + crop.key()
 	}
 	key := store.VariantOverrideKey(cid, cacheVariant)
 	if previewCID, ok := h.variantOverrides.Get(key); ok {
@@ -81,7 +85,12 @@ func (h *Handler) ensureConfiguredPreview(ctx context.Context, cid string, manif
 		if len(source) > fitPreviewMaxSource {
 			return nil, fmt.Errorf("source image exceeds preview limit")
 		}
-		preview, err := h.imageProcessor.ConfiguredPreview(ctx, source, size)
+		var preview []byte
+		if crop != nil {
+			preview, err = h.imageProcessor.CroppedPreview(ctx, source, size, crop.X, crop.Y, crop.W, crop.H)
+		} else {
+			preview, err = h.imageProcessor.ConfiguredPreview(ctx, source, size)
+		}
 		if err != nil {
 			return nil, err
 		}

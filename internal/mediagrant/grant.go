@@ -30,13 +30,16 @@ const MaxTTL = time.Hour
 // Claims identify an immutable manifest and the exact operations authorized
 // by fresh policy evaluation. HLS children must be resolved from that manifest.
 type Claims struct {
-	Version      int      `json:"v"`
-	Session      string   `json:"s"`
-	LinkID       int64    `json:"l"`
-	AssetID      int64    `json:"a"`
-	SourceCID    string   `json:"c"`
-	Video        bool     `json:"video,omitempty"`
-	PosterCID    string   `json:"poster,omitempty"`
+	Version   int    `json:"v"`
+	Session   string `json:"s"`
+	LinkID    int64  `json:"l"`
+	AssetID   int64  `json:"a"`
+	SourceCID string `json:"c"`
+	Video     bool   `json:"video,omitempty"`
+	PosterCID string `json:"poster,omitempty"`
+	// Crop is the part of the picture the link shows, "x,y,w,h" in
+	// fractions of the picture; empty shows it whole.
+	Crop         string   `json:"cr,omitempty"`
 	Mode         string   `json:"m"`
 	Purpose      string   `json:"p"`
 	Operations   []string `json:"o"`
