@@ -45,6 +45,27 @@ func TestCORS(t *testing.T) {
 	}
 }
 
+func TestCORSSeveralOriginsReturnsRequestOrigin(t *testing.T) {
+	handler := CORS([]string{"https://a.example", "https://b.example"}, []string{"Authorization"})(okHandler())
+	for origin, want := range map[string]string{"https://b.example": "https://b.example", "https://evil.example": "", "": ""} {
+		req := httptest.NewRequest(http.MethodOptions, "/upload", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("expected 204 for OPTIONS, got %d", rr.Code)
+		}
+		if got := rr.Header().Get("Access-Control-Allow-Origin"); got != want {
+			t.Fatalf("origin %q: expected %q, got %q", origin, want, got)
+		}
+		if got := rr.Header().Get("Vary"); got != "Origin" {
+			t.Fatalf("expected Vary: Origin, got %q", got)
+		}
+	}
+}
+
 func TestCORSPreflight(t *testing.T) {
 	handler := CORS([]string{"*"}, []string{"Content-Type"})(okHandler())
 	req := httptest.NewRequest(http.MethodOptions, "/", nil)
