@@ -150,8 +150,13 @@ func probeVideoInfo(ctx context.Context, ffprobePath, inputPath string) (*VideoI
 		duration = stream.Duration
 	}
 	parsedDuration, err := strconv.ParseFloat(strings.TrimSpace(duration), 64)
-	if err != nil {
-		return nil, fmt.Errorf("parse duration: %w", err)
+	if err != nil || parsedDuration <= 0 {
+		// A video recorded in a browser (MediaRecorder WebM) carries no
+		// duration in its header: it is read from the last frame instead.
+		parsedDuration, err = probePacketDuration(ctx, ffprobePath, inputPath)
+		if err != nil {
+			return nil, fmt.Errorf("parse duration: %w", err)
+		}
 	}
 	rotation, _ := strconv.Atoi(strings.TrimSpace(stream.Tags.Rotate))
 	for _, sideData := range stream.SideDataList {
@@ -187,4 +192,44 @@ func parseFrameRate(value string) float64 {
 		return 0
 	}
 	return numerator / denominator
+}
+
+// probePacketDuration measures a video that does not state its duration: the
+// end of its last video frame, read from the packets.
+func probePacketDuration(ctx context.Context, ffprobePath, inputPath string) (float64, error) {
+	out, err := exec.CommandContext(ctx, ffprobePath,
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "packet=pts_time,duration_time",
+		"-of", "csv=p=0",
+		inputPath,
+	).Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe packets: %w", err)
+	}
+	return lastFrameEnd(string(out))
+}
+
+// lastFrameEnd is the latest frame start plus its length, from ffprobe's
+// "pts_time,duration_time" lines; a frame without either is skipped.
+func lastFrameEnd(lines string) (float64, error) {
+	end := 0.0
+	for _, line := range strings.Split(lines, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), ",")
+		pts, err := strconv.ParseFloat(fields[0], 64)
+		if err != nil {
+			continue
+		}
+		length := 0.0
+		if len(fields) > 1 {
+			length, _ = strconv.ParseFloat(fields[1], 64)
+		}
+		if pts+length > end {
+			end = pts + length
+		}
+	}
+	if end <= 0 {
+		return 0, fmt.Errorf("no timed video frames")
+	}
+	return end, nil
 }
