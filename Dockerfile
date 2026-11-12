@@ -2,7 +2,12 @@
 
 # YuNet relies on OpenCV FaceDetectorYN. Keep build and runtime on the same
 # OpenCV ABI rather than delegating face detection to an external service.
-FROM gocv/opencv:4.10.0 AS builder
+FROM gocv/opencv:4.13.0 AS builder
+
+# go.mod needs a newer Go than the image ships; this exact toolchain (the one
+# docs/infra/build.py uses for the other Go services) is fetched and
+# verified by the go command itself (sum.golang.org).
+ENV GOTOOLCHAIN=go1.27.3
 
 WORKDIR /app
 
@@ -16,24 +21,22 @@ RUN go build -mod=readonly -o /bin/server ./cmd/server/
 FROM builder AS test
 RUN go vet ./... && go test ./...
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 # ffmpeg для видеотранскодирования, jpegtran для progressive JPEG variants,
-# libheif для HEIC-снимков, libtbb2, GTK и OpenCV для локального YuNet face
-# detection.
-#
-# Bullseye has moved to the Debian archive: the mirrors no longer refresh its
-# release files, so the runtime packages are installed from the archive with the
-# validity window switched off. Without this the image cannot be rebuilt at all.
-RUN printf 'deb http://archive.debian.org/debian bullseye main\n' > /etc/apt/sources.list && \
-    apt-get -o Acquire::Check-Valid-Until=false update && \
+# libheif для HEIC-снимков, libtbb12, GTK и OpenCV для локального YuNet face
+# detection. The runtime is the builder's Debian release, so OpenCV in
+# /usr/local/lib finds the same libraries it was linked with.
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       ffmpeg \
       libgtk2.0-0 \
       libheif-examples \
       libjpeg-turbo-progs \
-      libtbb2 \
+      libtbb12 \
+      libwebpdemux2 \
+    && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

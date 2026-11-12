@@ -27,7 +27,7 @@ func (m *mockAdder) Add(ctx context.Context, filename string, r io.Reader) (*ipf
 	m.mu.Unlock()
 
 	if m.errAfter > 0 && cnt > m.errAfter {
-		return nil, fmt.Errorf(m.errMsg)
+		return nil, fmt.Errorf("%s", m.errMsg)
 	}
 
 	io.ReadAll(r)
